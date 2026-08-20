@@ -1,0 +1,23 @@
+{
+  "name": "NovaBoard - Interactive Whiteboard",
+  "short_name": "NovaBoard",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#151623",
+  "theme_color": "#151623",
+  "description": "Next-generation interactive whiteboard with 2D/3D graphing calculator, notes, and PDF export",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
