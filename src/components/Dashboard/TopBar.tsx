@@ -24,10 +24,17 @@ export const TopBar = ({ searchQuery, setSearchQuery }: TopBarProps) => {
   return (
     <header className="h-16 flex items-center justify-between px-6 flex-shrink-0">
       <div className="flex items-center gap-3">
-        <div className="w-8 h-8 rounded bg-indigo-600 text-white flex items-center justify-center font-bold">N</div>
+        <img 
+          src="/logo.png" 
+          alt="NovaBoard Logo" 
+          className="h-10 w-10 object-contain rounded-xl shadow-md border border-white/10"
+        />
         <div>
-          <h1 className="font-semibold leading-tight">Nova Canvas</h1>
-          <p className="text-xs opacity-60">Your notebooks</p>
+          <h1 className="font-bold text-base leading-tight tracking-tight flex items-center gap-0.5">
+            <span className="text-[#38bdf8]">NOVA</span>
+            <span className="text-[#f97316]">BOARD</span>
+          </h1>
+          <p className="text-[11px] opacity-60">Your notebooks</p>
         </div>
       </div>
 

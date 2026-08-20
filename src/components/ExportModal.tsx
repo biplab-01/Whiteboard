@@ -11,7 +11,7 @@ export const ExportModal: React.FC = () => {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const activeNotebook = notebooks.find(n => n.id === activeNotebookId);
-  const notebookTitle = activeNotebook?.name || 'Nova_Canvas';
+  const notebookTitle = activeNotebook?.name || 'NovaBoard';
 
   const triggerDownload = (url: string, filename: string) => {
     const a = document.createElement('a');
