@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import * as fabric from 'fabric';
 import { useBoardStore, getPageDimensions } from '../store/useBoardStore';
 import * as pdfjsLib from 'pdfjs-dist';
@@ -26,6 +26,8 @@ export const Board: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fabricRef = useRef<fabric.Canvas | null>(null);
   const clipboardRef = useRef<fabric.FabricObject | null>(null);
+  const historyMapRef = useRef<Map<string, { undoStack: string[]; redoStack: string[] }>>(new Map());
+  const isHistoryOperationRef = useRef<boolean>(false);
   
   const { 
     currentPageId, 
@@ -47,6 +49,231 @@ export const Board: React.FC = () => {
   } = useBoardStore();
 
   const currentPage = pages.find(p => p.id === currentPageId);
+
+  const renderBackground = useCallback((canvas: fabric.Canvas) => {
+    const { width: pageW, height: pageH } = getPageDimensions(pageSize, pageOrientation);
+    const x = (canvas.width! - pageW) / 2;
+    const y = Math.max(50, (canvas.height! - pageH) / 2); // 50px top padding
+
+    // For the actual canvas background (the infinite space outside page)
+    canvas.backgroundColor = isDarkMode ? '#121212' : '#e5e7eb'; 
+
+    // Create the Page Rect
+    let pageBg: string | fabric.Gradient<any> = bgColor;
+    if (bgType === 'gradient') {
+      if (bgColor.includes(',')) {
+        const [c1, c2] = bgColor.split(',');
+        pageBg = new fabric.Gradient({
+          type: 'linear',
+          coords: { x1: 0, y1: 0, x2: pageW, y2: pageH },
+          colorStops: [
+            { offset: 0, color: c1.trim() },
+            { offset: 1, color: c2.trim() }
+          ]
+        });
+      } else {
+        pageBg = bgColor;
+      }
+    }
+
+    const pageRect: any = new fabric.Rect({
+      left: x,
+      top: y,
+      width: pageW,
+      height: pageH,
+      fill: pageBg,
+      selectable: false,
+      evented: false, // Don't block interactions
+      excludeFromExport: true,
+      shadow: new fabric.Shadow({
+        color: isDarkMode ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.12)',
+        blur: 16,
+        offsetX: 0,
+        offsetY: 8
+      })
+    });
+
+    // Remove old page background if exists (identified by special name)
+    const oldBgs = canvas.getObjects().filter((o: any) => o.name === 'a4-background' || o.name === 'a4-ruled-line');
+    oldBgs.forEach(o => canvas.remove(o));
+
+    pageRect.name = 'a4-background';
+    canvas.add(pageRect);
+    canvas.sendObjectToBack(pageRect);
+
+    // Draw Ruled Lines
+    if (isRuled) {
+      const lineSpacing = 30; // standard ruled line spacing
+      for (let i = lineSpacing; i < pageH; i += lineSpacing) {
+        const line: any = new fabric.Line([x, y + i, x + pageW, y + i], {
+          stroke: ruleColor,
+          strokeWidth: 1,
+          selectable: false,
+          evented: false,
+          opacity: 0.5
+        });
+        line.name = 'a4-ruled-line';
+        canvas.add(line);
+      }
+    }
+
+    canvas.requestRenderAll();
+  }, [pageSize, pageOrientation, isDarkMode, bgColor, bgType, isRuled, ruleColor]);
+
+  const getCanvasSnapshot = useCallback((canvas: fabric.Canvas): string => {
+    const json = (canvas as any).toJSON(['name', 'excludeFromExport']);
+    if (json && Array.isArray(json.objects)) {
+      json.objects = json.objects.filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
+    }
+    return JSON.stringify(json);
+  }, []);
+
+  const saveState = useCallback((snapshot?: string) => {
+    const { currentPageId: livePageId, updatePageData: liveUpdate } = useBoardStore.getState();
+    const canvas = fabricRef.current;
+    if (canvas && livePageId) {
+      const data = snapshot ?? getCanvasSnapshot(canvas);
+      liveUpdate(livePageId, data);
+    }
+  }, [getCanvasSnapshot]);
+
+  const recordState = useCallback(() => {
+    if (isHistoryOperationRef.current) return;
+    const canvas = fabricRef.current;
+    const livePageId = useBoardStore.getState().currentPageId;
+    if (!canvas || !livePageId) return;
+
+    const snapshot = getCanvasSnapshot(canvas);
+    let history = historyMapRef.current.get(livePageId);
+    if (!history) {
+      history = { undoStack: [], redoStack: [] };
+      historyMapRef.current.set(livePageId, history);
+    }
+
+    const top = history.undoStack[history.undoStack.length - 1];
+    if (top === snapshot) return;
+
+    history.undoStack.push(snapshot);
+    if (history.undoStack.length > 60) {
+      history.undoStack.shift();
+    }
+    history.redoStack = [];
+
+    useBoardStore.getState().setCanUndo(history.undoStack.length > 1);
+    useBoardStore.getState().setCanRedo(false);
+
+    saveState(snapshot);
+  }, [getCanvasSnapshot, saveState]);
+
+  const initPageHistory = useCallback((pageId: string, initialSnapshot: string) => {
+    let history = historyMapRef.current.get(pageId);
+    if (!history) {
+      history = { undoStack: [initialSnapshot], redoStack: [] };
+      historyMapRef.current.set(pageId, history);
+    } else if (history.undoStack.length === 0) {
+      history.undoStack = [initialSnapshot];
+      history.redoStack = [];
+    }
+    useBoardStore.getState().setCanUndo(history.undoStack.length > 1);
+    useBoardStore.getState().setCanRedo(history.redoStack.length > 0);
+  }, []);
+
+  const handleUndo = useCallback(async () => {
+    if (isHistoryOperationRef.current) return;
+    const canvas = fabricRef.current;
+    const livePageId = useBoardStore.getState().currentPageId;
+    if (!canvas || !livePageId) return;
+
+    const history = historyMapRef.current.get(livePageId);
+    if (!history || history.undoStack.length <= 1) {
+      useBoardStore.getState().setCanUndo(false);
+      return;
+    }
+
+    isHistoryOperationRef.current = true;
+
+    try {
+      const currentState = history.undoStack.pop()!;
+      history.redoStack.push(currentState);
+
+      const prevState = history.undoStack[history.undoStack.length - 1];
+      canvas.discardActiveObject();
+
+      const parsed = JSON.parse(prevState);
+
+      await canvas.loadFromJSON(parsed);
+
+      const liveTool = useBoardStore.getState().currentTool;
+      const isSelect = liveTool === 'select';
+      canvas.forEachObject((obj) => {
+        if ((obj as any).name !== 'a4-background' && (obj as any).name !== 'a4-ruled-line') {
+          obj.selectable = isSelect;
+          obj.evented = true;
+          obj.strokeUniform = true;
+        }
+      });
+
+      renderBackground(canvas);
+      canvas.requestRenderAll();
+
+      useBoardStore.getState().setCanUndo(history.undoStack.length > 1);
+      useBoardStore.getState().setCanRedo(history.redoStack.length > 0);
+
+      saveState(prevState);
+    } catch (err) {
+      console.error('Error during undo:', err);
+    } finally {
+      isHistoryOperationRef.current = false;
+    }
+  }, [renderBackground, saveState]);
+
+  const handleRedo = useCallback(async () => {
+    if (isHistoryOperationRef.current) return;
+    const canvas = fabricRef.current;
+    const livePageId = useBoardStore.getState().currentPageId;
+    if (!canvas || !livePageId) return;
+
+    const history = historyMapRef.current.get(livePageId);
+    if (!history || history.redoStack.length === 0) {
+      useBoardStore.getState().setCanRedo(false);
+      return;
+    }
+
+    isHistoryOperationRef.current = true;
+
+    try {
+      const nextState = history.redoStack.pop()!;
+      history.undoStack.push(nextState);
+
+      canvas.discardActiveObject();
+
+      const parsed = JSON.parse(nextState);
+
+      await canvas.loadFromJSON(parsed);
+
+      const liveTool = useBoardStore.getState().currentTool;
+      const isSelect = liveTool === 'select';
+      canvas.forEachObject((obj) => {
+        if ((obj as any).name !== 'a4-background' && (obj as any).name !== 'a4-ruled-line') {
+          obj.selectable = isSelect;
+          obj.evented = true;
+          obj.strokeUniform = true;
+        }
+      });
+
+      renderBackground(canvas);
+      canvas.requestRenderAll();
+
+      useBoardStore.getState().setCanUndo(history.undoStack.length > 1);
+      useBoardStore.getState().setCanRedo(history.redoStack.length > 0);
+
+      saveState(nextState);
+    } catch (err) {
+      console.error('Error during redo:', err);
+    } finally {
+      isHistoryOperationRef.current = false;
+    }
+  }, [renderBackground, saveState]);
 
   // Initialize Fabric Canvas
   useEffect(() => {
@@ -105,10 +332,20 @@ export const Board: React.FC = () => {
 
     // Load current page data if exists
     if (currentPage?.canvas_data) {
-      canvas.loadFromJSON(currentPage.canvas_data as Record<string, any>).then(() => {
+      const parsed = typeof currentPage.canvas_data === 'string'
+        ? JSON.parse(currentPage.canvas_data)
+        : currentPage.canvas_data;
+      canvas.loadFromJSON(parsed).then(() => {
         renderBackground(canvas);
         canvas.requestRenderAll();
+        if (currentPageId) {
+          initPageHistory(currentPageId, getCanvasSnapshot(canvas));
+        }
       });
+    } else {
+      if (currentPageId) {
+        initPageHistory(currentPageId, getCanvasSnapshot(canvas));
+      }
     }
 
     // Text formatting listeners
@@ -183,8 +420,8 @@ export const Board: React.FC = () => {
       if (target && typeof target.text === 'string' && target.text.trim() === '') {
         canvas.remove(target);
         canvas.requestRenderAll();
-        saveState();
       }
+      recordState();
     });
 
     // Dedicated Mouse Wheel Zoom Operator
@@ -248,10 +485,12 @@ export const Board: React.FC = () => {
           textObj.set(updates);
         }
         canvas.requestRenderAll();
-        saveState();
+        recordState();
         handleSelectionUpdate();
       }
     };
+
+    window.addEventListener('format-text', formatTextHandler);
 
     return () => {
       window.removeEventListener('resize', handleResize);
@@ -262,6 +501,24 @@ export const Board: React.FC = () => {
     };
   }, []); // Only run once to initialize
 
+  // Undo & Redo custom event listeners
+  useEffect(() => {
+    const onUndoEvent = () => {
+      handleUndo();
+    };
+    const onRedoEvent = () => {
+      handleRedo();
+    };
+
+    window.addEventListener('board-undo', onUndoEvent);
+    window.addEventListener('board-redo', onRedoEvent);
+
+    return () => {
+      window.removeEventListener('board-undo', onUndoEvent);
+      window.removeEventListener('board-redo', onRedoEvent);
+    };
+  }, [handleUndo, handleRedo]);
+
   // Handle Clear Canvas / Erase All
   useEffect(() => {
     const handleClearCanvas = () => {
@@ -270,21 +527,25 @@ export const Board: React.FC = () => {
 
       canvas.discardActiveObject();
       const allObjects = [...canvas.getObjects()];
+      let hasRemoved = false;
       for (const obj of allObjects) {
         if ((obj as any).name !== 'a4-background' && (obj as any).name !== 'a4-ruled-line') {
           canvas.remove(obj);
+          hasRemoved = true;
         }
       }
       renderBackground(canvas);
       canvas.requestRenderAll();
-      saveState();
+      if (hasRemoved) {
+        recordState();
+      }
     };
 
     window.addEventListener('clear-canvas', handleClearCanvas);
     return () => window.removeEventListener('clear-canvas', handleClearCanvas);
-  }, [currentPageId, bgType, bgColor, isRuled, ruleColor, pageSize, pageOrientation, isDarkMode]);
+  }, [renderBackground, recordState]);
 
-  // Copy, Cut, Paste, Duplicate and Delete keyboard shortcuts
+  // Copy, Cut, Paste, Duplicate, Delete, Undo & Redo keyboard shortcuts
   useEffect(() => {
     const handleCopy = async () => {
       const canvas = fabricRef.current;
@@ -311,10 +572,12 @@ export const Board: React.FC = () => {
 
       const activeObjects = canvas.getActiveObjects();
       const toDelete = activeObjects.filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
-      canvas.discardActiveObject();
-      canvas.remove(...toDelete);
-      canvas.requestRenderAll();
-      saveState();
+      if (toDelete.length > 0) {
+        canvas.discardActiveObject();
+        canvas.remove(...toDelete);
+        canvas.requestRenderAll();
+        recordState();
+      }
     };
 
     const handlePaste = async () => {
@@ -347,7 +610,7 @@ export const Board: React.FC = () => {
 
       canvas.setActiveObject(clonedObj);
       canvas.requestRenderAll();
-      saveState();
+      recordState();
     };
 
     const handleDelete = () => {
@@ -364,10 +627,12 @@ export const Board: React.FC = () => {
       const activeObjects = canvas.getActiveObjects();
       if (activeObjects && activeObjects.length > 0) {
         const toDelete = activeObjects.filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
-        canvas.discardActiveObject();
-        canvas.remove(...toDelete);
-        canvas.requestRenderAll();
-        saveState();
+        if (toDelete.length > 0) {
+          canvas.discardActiveObject();
+          canvas.remove(...toDelete);
+          canvas.requestRenderAll();
+          recordState();
+        }
       }
     };
 
@@ -381,7 +646,24 @@ export const Board: React.FC = () => {
       const key = e.key.toLowerCase();
 
       if (isCtrlOrMeta) {
-        if (key === 'c') {
+        if (key === 'z') {
+          const active = fabricRef.current?.getActiveObject();
+          // If actively typing text inside Textbox, do not trigger canvas undo
+          if (active && (active as any).isEditing) return;
+          
+          e.preventDefault();
+          if (e.shiftKey) {
+            await handleRedo();
+          } else {
+            await handleUndo();
+          }
+        } else if (key === 'y') {
+          const active = fabricRef.current?.getActiveObject();
+          if (active && (active as any).isEditing) return;
+
+          e.preventDefault();
+          await handleRedo();
+        } else if (key === 'c') {
           const active = fabricRef.current?.getActiveObject();
           if (active && (active as any).isEditing) return;
           e.preventDefault();
@@ -415,7 +697,7 @@ export const Board: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [handleUndo, handleRedo, recordState]);
 
   useEffect(() => {
     const handleInsertMedia = async (e: Event) => {
@@ -439,7 +721,7 @@ export const Board: React.FC = () => {
         canvas.add(img);
         canvas.setActiveObject(img);
         canvas.requestRenderAll();
-        saveState();
+        recordState();
       } else if (type === 'pdf') {
         try {
           const loadingTask = pdfjsLib.getDocument({ url });
@@ -479,7 +761,7 @@ export const Board: React.FC = () => {
             currentY += img.getScaledHeight() + 20;
           }
           canvas.requestRenderAll();
-          saveState();
+          recordState();
         } catch (error) {
           console.error("Error loading PDF:", error);
         }
@@ -488,7 +770,7 @@ export const Board: React.FC = () => {
 
     window.addEventListener('insert-media', handleInsertMedia);
     return () => window.removeEventListener('insert-media', handleInsertMedia);
-  }, []);
+  }, [pageSize, pageOrientation, recordState]);
 
   useEffect(() => {
     const handleSaveRequest = () => {
@@ -496,7 +778,7 @@ export const Board: React.FC = () => {
     };
     window.addEventListener('save-canvas-state', handleSaveRequest);
     return () => window.removeEventListener('save-canvas-state', handleSaveRequest);
-  }, []);
+  }, [saveState]);
 
   // Handle page switch
   useEffect(() => {
@@ -508,111 +790,48 @@ export const Board: React.FC = () => {
     const currentPages = useBoardStore.getState().pages;
     const pageToLoad = currentPages.find(p => p.id === currentPageId);
 
+    // Sync canUndo/canRedo with active page history
+    const existingHistory = historyMapRef.current.get(currentPageId);
+    if (existingHistory) {
+      useBoardStore.getState().setCanUndo(existingHistory.undoStack.length > 1);
+      useBoardStore.getState().setCanRedo(existingHistory.redoStack.length > 0);
+    } else {
+      useBoardStore.getState().setCanUndo(false);
+      useBoardStore.getState().setCanRedo(false);
+    }
+
     if (pageToLoad?.canvas_data) {
       try {
         const parsed = typeof pageToLoad.canvas_data === 'string'
           ? JSON.parse(pageToLoad.canvas_data)
           : pageToLoad.canvas_data;
 
-        // Clean non-background objects before loading
-        const oldObjs = canvas.getObjects().filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
-        canvas.remove(...oldObjs);
-
         canvas.loadFromJSON(parsed).then(() => {
           renderBackground(canvas);
           canvas.requestRenderAll();
+          initPageHistory(currentPageId, getCanvasSnapshot(canvas));
         });
       } catch (err) {
         console.error('Error loading page JSON:', err);
-        const oldObjs = canvas.getObjects().filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
-        canvas.remove(...oldObjs);
         renderBackground(canvas);
         canvas.requestRenderAll();
+        initPageHistory(currentPageId, getCanvasSnapshot(canvas));
       }
     } else {
       const oldObjs = canvas.getObjects().filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
       canvas.remove(...oldObjs);
       renderBackground(canvas);
       canvas.requestRenderAll();
+      initPageHistory(currentPageId, getCanvasSnapshot(canvas));
     }
-  }, [currentPageId]);
+  }, [currentPageId, renderBackground, initPageHistory, getCanvasSnapshot]);
 
   // Handle Background & Page Dimension changes
   useEffect(() => {
     const canvas = fabricRef.current;
     if (!canvas) return;
     renderBackground(canvas);
-  }, [bgType, bgColor, isRuled, ruleColor, pageSize, pageOrientation, isDarkMode]);
-
-  const renderBackground = (canvas: fabric.Canvas) => {
-    const { width: pageW, height: pageH } = getPageDimensions(pageSize, pageOrientation);
-    const x = (canvas.width! - pageW) / 2;
-    const y = Math.max(50, (canvas.height! - pageH) / 2); // 50px top padding
-
-    // For the actual canvas background (the infinite space outside page)
-    canvas.backgroundColor = isDarkMode ? '#121212' : '#e5e7eb'; 
-
-    // Create the Page Rect
-    let pageBg: string | fabric.Gradient<any> = bgColor;
-    if (bgType === 'gradient') {
-      if (bgColor.includes(',')) {
-        const [c1, c2] = bgColor.split(',');
-        pageBg = new fabric.Gradient({
-          type: 'linear',
-          coords: { x1: 0, y1: 0, x2: pageW, y2: pageH },
-          colorStops: [
-            { offset: 0, color: c1.trim() },
-            { offset: 1, color: c2.trim() }
-          ]
-        });
-      } else {
-        pageBg = bgColor;
-      }
-    }
-
-    const pageRect: any = new fabric.Rect({
-      left: x,
-      top: y,
-      width: pageW,
-      height: pageH,
-      fill: pageBg,
-      selectable: false,
-      evented: false, // Don't block interactions
-      excludeFromExport: true,
-      shadow: new fabric.Shadow({
-        color: isDarkMode ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.12)',
-        blur: 16,
-        offsetX: 0,
-        offsetY: 8
-      })
-    });
-
-    // Remove old page background if exists (identified by special name)
-    const oldBgs = canvas.getObjects().filter((o: any) => o.name === 'a4-background' || o.name === 'a4-ruled-line');
-    oldBgs.forEach(o => canvas.remove(o));
-
-    pageRect.name = 'a4-background';
-    canvas.add(pageRect);
-    canvas.sendObjectToBack(pageRect);
-
-    // Draw Ruled Lines
-    if (isRuled) {
-      const lineSpacing = 30; // standard ruled line spacing
-      for (let i = lineSpacing; i < pageH; i += lineSpacing) {
-        const line: any = new fabric.Line([x, y + i, x + pageW, y + i], {
-          stroke: ruleColor,
-          strokeWidth: 1,
-          selectable: false,
-          evented: false,
-          opacity: 0.5
-        });
-        line.name = 'a4-ruled-line';
-        canvas.add(line);
-      }
-    }
-
-    canvas.requestRenderAll();
-  };
+  }, [renderBackground]);
 
   // Tool setup (Pan, Pen, Shapes, Text, etc)
   useEffect(() => {
@@ -627,6 +846,8 @@ export const Board: React.FC = () => {
     canvas.off('mouse:down');
     canvas.off('mouse:move');
     canvas.off('mouse:up');
+    canvas.off('path:created');
+    canvas.off('object:modified');
     
     let isPanning = false;
     let lastPosX = 0;
@@ -638,6 +859,7 @@ export const Board: React.FC = () => {
     let origY = 0;
 
     let isErasing = false;
+    let hasErasedInGesture = false;
 
     const isPointTouchingObject = (obj: fabric.FabricObject, point: fabric.Point): boolean => {
       const strokeW = (obj.strokeWidth || 1) * Math.max(obj.scaleX || 1, obj.scaleY || 1);
@@ -842,20 +1064,28 @@ export const Board: React.FC = () => {
 
       canvas.on('mouse:down', (opt) => {
         isErasing = true;
+        hasErasedInGesture = false;
         const erased = eraseObjectAtPoint(opt.e);
-        if (erased) saveState();
+        if (erased) {
+          hasErasedInGesture = true;
+        }
       });
 
       canvas.on('mouse:move', (opt) => {
         if (isErasing) {
-          eraseObjectAtPoint(opt.e);
+          const erased = eraseObjectAtPoint(opt.e);
+          if (erased) {
+            hasErasedInGesture = true;
+          }
         }
       });
 
       canvas.on('mouse:up', () => {
         if (isErasing) {
           isErasing = false;
-          saveState();
+          if (hasErasedInGesture) {
+            recordState();
+          }
         }
       });
     } else if (currentTool === 'pen' || currentTool === 'highlighter') {
@@ -870,7 +1100,7 @@ export const Board: React.FC = () => {
           opt.path.strokeUniform = true;
           opt.path.selectable = false;
         }
-        saveState();
+        recordState();
       });
     } else {
       // Shapes & Text Mode
@@ -919,7 +1149,7 @@ export const Board: React.FC = () => {
           textbox.enterEditing();
           textbox.selectAll();
           canvas.requestRenderAll();
-          saveState();
+          recordState();
           setCurrentTool('select');
           return;
         }
@@ -987,9 +1217,9 @@ export const Board: React.FC = () => {
             shapeRef.perPixelTargetFind = false;
             canvas.setActiveObject(shapeRef);
             setCurrentTool('select');
+            recordState();
           }
           canvas.requestRenderAll();
-          saveState();
         }
         shapeRef = null;
       });
@@ -1028,21 +1258,12 @@ export const Board: React.FC = () => {
       }
     });
 
-    // Object modification hook to save state
+    // Object modification hook to record history state
     canvas.on('object:modified', () => {
-       saveState();
+      recordState();
     });
 
-  }, [currentTool, strokeColor, strokeWidth, fillColor, opacity]);
-
-  const saveState = () => {
-    const { currentPageId: livePageId, updatePageData: liveUpdate } = useBoardStore.getState();
-    const canvas = fabricRef.current;
-    if (canvas && livePageId) {
-       const json = (canvas as any).toJSON(['name', 'excludeFromExport']);
-       liveUpdate(livePageId, JSON.stringify(json));
-    }
-  };
+  }, [currentTool, strokeColor, strokeWidth, fillColor, opacity, setCurrentTool, isDarkMode, recordState]);
 
   return (
     <div className={`w-full h-screen overflow-hidden ${isDarkMode ? 'bg-[#121212]' : 'bg-gray-100'}`}>

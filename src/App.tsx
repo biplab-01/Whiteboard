@@ -38,7 +38,21 @@ function App() {
       
       const key = e.key.toLowerCase();
       
-      if (!e.ctrlKey && !e.metaKey) {
+      const isCtrlOrMeta = e.ctrlKey || e.metaKey;
+      
+      if (isCtrlOrMeta) {
+        if (key === 'z') {
+          e.preventDefault();
+          if (e.shiftKey) {
+            window.dispatchEvent(new CustomEvent('board-redo'));
+          } else {
+            window.dispatchEvent(new CustomEvent('board-undo'));
+          }
+        } else if (key === 'y') {
+          e.preventDefault();
+          window.dispatchEvent(new CustomEvent('board-redo'));
+        }
+      } else {
         switch (key) {
           case 'v': setCurrentTool('select'); break;
           case 'p': setCurrentTool('pen'); break;

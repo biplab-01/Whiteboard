@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useBoardStore } from '../store/useBoardStore';
 import type { ToolType } from '../store/useBoardStore';
 import { 
+  Undo2,
+  Redo2,
   MousePointer2, 
   Hand, 
   PenTool, 
@@ -18,7 +20,7 @@ import {
 } from 'lucide-react';
 
 export const Toolbar: React.FC = () => {
-  const { currentTool, setCurrentTool, isDarkMode } = useBoardStore();
+  const { currentTool, setCurrentTool, isDarkMode, canUndo, canRedo, undo, redo } = useBoardStore();
   const [showEraserMenu, setShowEraserMenu] = useState(false);
   const eraserMenuRef = useRef<HTMLDivElement>(null);
 
@@ -51,9 +53,41 @@ export const Toolbar: React.FC = () => {
   ];
 
   return (
-    <div className={`fixed bottom-6 left-1/2 transform -translate-x-1/2 flex gap-2 p-2 rounded-xl shadow-lg border backdrop-blur-md transition-colors z-30 ${
+    <div className={`fixed bottom-6 left-1/2 transform -translate-x-1/2 flex items-center gap-1.5 p-2 rounded-xl shadow-lg border backdrop-blur-md transition-colors z-30 ${
       isDarkMode ? 'bg-gray-800/80 border-gray-700 text-white' : 'bg-white/80 border-gray-200 text-gray-800'
     }`}>
+      {/* Undo Button */}
+      <button
+        type="button"
+        onClick={undo}
+        disabled={!canUndo}
+        title="Undo (Ctrl+Z)"
+        className={`p-3 rounded-lg flex items-center justify-center transition-all ${
+          !canUndo 
+            ? 'opacity-30 cursor-not-allowed text-gray-400' 
+            : (isDarkMode ? 'hover:bg-gray-700 text-gray-200 hover:text-white' : 'hover:bg-gray-100 text-gray-700 hover:text-black')
+        }`}
+      >
+        <Undo2 size={20} />
+      </button>
+
+      {/* Redo Button */}
+      <button
+        type="button"
+        onClick={redo}
+        disabled={!canRedo}
+        title="Redo (Ctrl+Y / Ctrl+Shift+Z)"
+        className={`p-3 rounded-lg flex items-center justify-center transition-all ${
+          !canRedo 
+            ? 'opacity-30 cursor-not-allowed text-gray-400' 
+            : (isDarkMode ? 'hover:bg-gray-700 text-gray-200 hover:text-white' : 'hover:bg-gray-100 text-gray-700 hover:text-black')
+        }`}
+      >
+        <Redo2 size={20} />
+      </button>
+
+      {/* Vertical separator */}
+      <div className={`w-px h-6 mx-0.5 ${isDarkMode ? 'bg-gray-700' : 'bg-gray-300'}`}></div>
       {tools.map((tool) => {
         const isEraser = tool.id === 'eraser';
 

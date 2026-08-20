@@ -102,6 +102,14 @@ export interface BoardState {
   activeTextFormat: TextFormat | null;
   setActiveTextFormat: (format: TextFormat | null) => void;
 
+  // History / Undo & Redo
+  canUndo: boolean;
+  canRedo: boolean;
+  setCanUndo: (canUndo: boolean) => void;
+  setCanRedo: (canRedo: boolean) => void;
+  undo: () => void;
+  redo: () => void;
+
   // Theme
   isDarkMode: boolean;
   toggleTheme: () => void;
@@ -553,6 +561,17 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
   activeTextFormat: null,
   setActiveTextFormat: (format) => set({ activeTextFormat: format }),
+
+  canUndo: false,
+  canRedo: false,
+  setCanUndo: (canUndo) => set({ canUndo }),
+  setCanRedo: (canRedo) => set({ canRedo }),
+  undo: () => {
+    window.dispatchEvent(new CustomEvent('board-undo'));
+  },
+  redo: () => {
+    window.dispatchEvent(new CustomEvent('board-redo'));
+  },
 
   isDarkMode: true,
   toggleTheme: () => set((state) => ({ isDarkMode: !state.isDarkMode })),
