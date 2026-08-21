@@ -43,7 +43,7 @@ export const TextPropertiesPanel: React.FC = () => {
     { name: 'Comic Sans MS', value: 'Comic Sans MS' },
     { name: 'Algerian', value: 'Algerian' },
     { name: 'Times New Roman', value: 'Times New Roman' },
-    { name: 'Halington', value: 'Halington' },
+    { name: 'Hallington', value: 'Hallington' },
   ];
 
   const sizePresets = [14, 18, 24, 32, 48, 64, 96];
