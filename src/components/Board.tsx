@@ -592,6 +592,21 @@ export const Board: React.FC = () => {
         }
         textObj.setCoords();
         canvas.requestRenderAll();
+
+        // If font family was changed, ensure webfont is loaded and canvas re-renders immediately
+        if (updates.fontFamily && typeof document !== 'undefined' && document.fonts) {
+          const fontString = `${textObj.fontSize || 24}px "${updates.fontFamily}"`;
+          document.fonts.load(fontString).then(() => {
+            (textObj as any)._forceClearCache = true;
+            textObj.dirty = true;
+            if (typeof textObj.initDimensions === 'function') {
+              textObj.initDimensions();
+            }
+            textObj.setCoords();
+            canvas.requestRenderAll();
+          }).catch(() => {});
+        }
+
         recordState();
         handleSelectionUpdate();
       }

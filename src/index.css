@@ -5,6 +5,47 @@
   --color-secondary: #8b5cf6;
 }
 
+/* Custom & Decorative Font Faces */
+@font-face {
+  font-family: 'Algerian';
+  src: local('Algerian'), local('Algerian Regular'),
+       url('https://fonts.cdnfonts.com/s/14872/AlgerianRegular.woff') format('woff'),
+       url('https://fonts.cdnfonts.com/s/14872/AlgerianRegular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Harrington';
+  src: local('Harrington'), local('Harrington Regular'), local('HARNGTON'),
+       url('https://fonts.cdnfonts.com/s/16474/HARNGTON.woff') format('woff'),
+       url('https://fonts.cdnfonts.com/s/16474/HARNGTON.TTF') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Halington';
+  src: local('Halington'), local('Hallington'), local('Harrington'), local('Harrington Regular'), local('HARNGTON'),
+       url('https://fonts.cdnfonts.com/s/16474/HARNGTON.woff') format('woff'),
+       url('https://fonts.cdnfonts.com/s/16474/HARNGTON.TTF') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Hallington';
+  src: local('Hallington'), local('Halington'), local('Harrington'), local('Harrington Regular'), local('HARNGTON'),
+       url('https://fonts.cdnfonts.com/s/16474/HARNGTON.woff') format('woff'),
+       url('https://fonts.cdnfonts.com/s/16474/HARNGTON.TTF') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
 body {
   margin: 0;
   padding: 0;
