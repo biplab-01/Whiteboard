@@ -85,75 +85,179 @@ const distToSegment = (px: number, py: number, x1: number, y1: number, x2: numbe
   return Math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)));
 };
 
-// Helper: Slice a fabric.Path into surviving sub-paths when cut by an eraser segment
-const slicePathWithEraser = (
-  path: any,
+// Helper: Extract sampled points in scene coordinates along any object's perimeter/path/stroke
+interface SampledScenePoint {
+  x: number;
+  y: number;
+}
+
+const getObjectSampledPoints = (obj: any): SampledScenePoint[] => {
+  const matrix = obj.calcTransformMatrix();
+  const points: SampledScenePoint[] = [];
+
+  if (obj.type === 'path' && Array.isArray(obj.path)) {
+    const offX = obj.pathOffset?.x || 0;
+    const offY = obj.pathOffset?.y || 0;
+    let lastLocal: { x: number; y: number } | null = null;
+
+    for (const cmd of obj.path) {
+      const type = cmd[0];
+      if (type === 'M' || type === 'L') {
+        const curLocal = { x: Number(cmd[1]) - offX, y: Number(cmd[2]) - offY };
+        if (!lastLocal || type === 'M') {
+          const scenePt = fabric.util.transformPoint(new fabric.Point(curLocal.x, curLocal.y), matrix);
+          points.push({ x: scenePt.x, y: scenePt.y });
+        } else {
+          const d = Math.hypot(curLocal.x - lastLocal.x, curLocal.y - lastLocal.y);
+          const steps = Math.max(1, Math.ceil(d / 3));
+          for (let s = 1; s <= steps; s++) {
+            const t = s / steps;
+            const lx = lastLocal.x + (curLocal.x - lastLocal.x) * t;
+            const ly = lastLocal.y + (curLocal.y - lastLocal.y) * t;
+            const scenePt = fabric.util.transformPoint(new fabric.Point(lx, ly), matrix);
+            points.push({ x: scenePt.x, y: scenePt.y });
+          }
+        }
+        lastLocal = curLocal;
+      } else if (type === 'Q') {
+        const cpLocal = { x: Number(cmd[1]) - offX, y: Number(cmd[2]) - offY };
+        const endLocal = { x: Number(cmd[3]) - offX, y: Number(cmd[4]) - offY };
+        const startLocal = lastLocal || cpLocal;
+        const d = Math.hypot(endLocal.x - startLocal.x, endLocal.y - startLocal.y);
+        const steps = Math.max(2, Math.ceil(d / 3));
+
+        for (let s = 1; s <= steps; s++) {
+          const t = s / steps;
+          const oneMinusT = 1 - t;
+          const lx = oneMinusT * oneMinusT * startLocal.x + 2 * oneMinusT * t * cpLocal.x + t * t * endLocal.x;
+          const ly = oneMinusT * oneMinusT * startLocal.y + 2 * oneMinusT * t * cpLocal.y + t * t * endLocal.y;
+          const scenePt = fabric.util.transformPoint(new fabric.Point(lx, ly), matrix);
+          points.push({ x: scenePt.x, y: scenePt.y });
+        }
+        lastLocal = endLocal;
+      } else if (type === 'C') {
+        const endLocal = { x: Number(cmd[5]) - offX, y: Number(cmd[6]) - offY };
+        const scenePt = fabric.util.transformPoint(new fabric.Point(endLocal.x, endLocal.y), matrix);
+        points.push({ x: scenePt.x, y: scenePt.y });
+        lastLocal = endLocal;
+      }
+    }
+  } else if (obj.type === 'line') {
+    const start = fabric.util.transformPoint(new fabric.Point(obj.x1 || 0, obj.y1 || 0), matrix);
+    const end = fabric.util.transformPoint(new fabric.Point(obj.x2 || 0, obj.y2 || 0), matrix);
+    const totalLen = Math.hypot(end.x - start.x, end.y - start.y);
+    const steps = Math.max(2, Math.ceil(totalLen / 3));
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      points.push({
+        x: start.x + (end.x - start.x) * t,
+        y: start.y + (end.y - start.y) * t,
+      });
+    }
+  } else if (obj.type === 'rect') {
+    const w = obj.width || 0;
+    const h = obj.height || 0;
+    const corners = [
+      { x: -w / 2, y: -h / 2 },
+      { x: w / 2, y: -h / 2 },
+      { x: w / 2, y: h / 2 },
+      { x: -w / 2, y: h / 2 },
+      { x: -w / 2, y: -h / 2 }
+    ];
+    for (let i = 0; i < 4; i++) {
+      const c1 = corners[i];
+      const c2 = corners[i + 1];
+      const edgeLen = Math.hypot(c2.x - c1.x, c2.y - c1.y);
+      const steps = Math.max(2, Math.ceil(edgeLen / 3));
+      for (let s = 0; s < steps; s++) {
+        const t = s / steps;
+        const lx = c1.x + (c2.x - c1.x) * t;
+        const ly = c1.y + (c2.y - c1.y) * t;
+        const scenePt = fabric.util.transformPoint(new fabric.Point(lx, ly), matrix);
+        points.push({ x: scenePt.x, y: scenePt.y });
+      }
+    }
+  } else if (obj.type === 'triangle') {
+    const w = obj.width || 0;
+    const h = obj.height || 0;
+    const corners = [
+      { x: 0, y: -h / 2 },
+      { x: w / 2, y: h / 2 },
+      { x: -w / 2, y: h / 2 },
+      { x: 0, y: -h / 2 }
+    ];
+    for (let i = 0; i < 3; i++) {
+      const c1 = corners[i];
+      const c2 = corners[i + 1];
+      const edgeLen = Math.hypot(c2.x - c1.x, c2.y - c1.y);
+      const steps = Math.max(2, Math.ceil(edgeLen / 3));
+      for (let s = 0; s < steps; s++) {
+        const t = s / steps;
+        const lx = c1.x + (c2.x - c1.x) * t;
+        const ly = c1.y + (c2.y - c1.y) * t;
+        const scenePt = fabric.util.transformPoint(new fabric.Point(lx, ly), matrix);
+        points.push({ x: scenePt.x, y: scenePt.y });
+      }
+    }
+  } else if (obj.type === 'ellipse' || obj.type === 'circle') {
+    const rx = obj.rx || (obj.radius || 0);
+    const ry = obj.ry || (obj.radius || 0);
+    const perimeterApprox = 2 * Math.PI * Math.sqrt((rx * rx + ry * ry) / 2);
+    const steps = Math.max(16, Math.ceil(perimeterApprox / 3));
+    for (let s = 0; s < steps; s++) {
+      const theta = (s / steps) * 2 * Math.PI;
+      const lx = rx * Math.cos(theta);
+      const ly = ry * Math.sin(theta);
+      const scenePt = fabric.util.transformPoint(new fabric.Point(lx, ly), matrix);
+      points.push({ x: scenePt.x, y: scenePt.y });
+    }
+  } else if (obj.type === 'polygon' && Array.isArray(obj.points) && obj.points.length > 1) {
+    const offX = obj.pathOffset?.x || 0;
+    const offY = obj.pathOffset?.y || 0;
+    const polyPts = obj.points.map((p: any) => ({ x: p.x - offX, y: p.y - offY }));
+    const count = polyPts.length;
+    for (let i = 0; i < count; i++) {
+      const c1 = polyPts[i];
+      const c2 = polyPts[(i + 1) % count];
+      const edgeLen = Math.hypot(c2.x - c1.x, c2.y - c1.y);
+      const steps = Math.max(2, Math.ceil(edgeLen / 3));
+      for (let s = 0; s < steps; s++) {
+        const t = s / steps;
+        const lx = c1.x + (c2.x - c1.x) * t;
+        const ly = c1.y + (c2.y - c1.y) * t;
+        const scenePt = fabric.util.transformPoint(new fabric.Point(lx, ly), matrix);
+        points.push({ x: scenePt.x, y: scenePt.y });
+      }
+    }
+  }
+
+  return points;
+};
+
+// Helper: Universally slice any vector object (shape, path, line) when cut by partial eraser
+const sliceObjectWithEraser = (
+  obj: any,
   p1: fabric.Point,
   p2: fabric.Point,
   radius: number
 ): { modified: boolean; remainingPaths: fabric.Path[] } => {
-  if (!path || path.type !== 'path' || !Array.isArray(path.path) || path.path.length === 0) {
+  if (!obj || (obj as any).name === 'a4-background' || (obj as any).name === 'a4-ruled-line') {
     return { modified: false, remainingPaths: [] };
   }
 
-  const offX = path.pathOffset?.x || 0;
-  const offY = path.pathOffset?.y || 0;
-  const matrix = path.calcTransformMatrix();
-  const strokeW = (path.strokeWidth || 1) * Math.max(path.scaleX || 1, path.scaleY || 1);
-  const effectiveRadius = radius + strokeW / 2;
-
-  // Sample fine points in scene space along the path
-  const sampledPoints: { x: number; y: number }[] = [];
-  let lastLocal: { x: number; y: number } | null = null;
-
-  for (const cmd of path.path) {
-    const type = cmd[0];
-    if (type === 'M' || type === 'L') {
-      const curLocal = { x: Number(cmd[1]) - offX, y: Number(cmd[2]) - offY };
-      if (!lastLocal || type === 'M') {
-        const scenePt = fabric.util.transformPoint(new fabric.Point(curLocal.x, curLocal.y), matrix);
-        sampledPoints.push({ x: scenePt.x, y: scenePt.y });
-      } else {
-        const d = Math.hypot(curLocal.x - lastLocal.x, curLocal.y - lastLocal.y);
-        const steps = Math.max(1, Math.ceil(d / 3));
-        for (let s = 1; s <= steps; s++) {
-          const t = s / steps;
-          const lx = lastLocal.x + (curLocal.x - lastLocal.x) * t;
-          const ly = lastLocal.y + (curLocal.y - lastLocal.y) * t;
-          const scenePt = fabric.util.transformPoint(new fabric.Point(lx, ly), matrix);
-          sampledPoints.push({ x: scenePt.x, y: scenePt.y });
-        }
-      }
-      lastLocal = curLocal;
-    } else if (type === 'Q') {
-      const cpLocal = { x: Number(cmd[1]) - offX, y: Number(cmd[2]) - offY };
-      const endLocal = { x: Number(cmd[3]) - offX, y: Number(cmd[4]) - offY };
-      const startLocal = lastLocal || cpLocal;
-      const d = Math.hypot(endLocal.x - startLocal.x, endLocal.y - startLocal.y);
-      const steps = Math.max(2, Math.ceil(d / 3));
-
-      for (let s = 1; s <= steps; s++) {
-        const t = s / steps;
-        const oneMinusT = 1 - t;
-        const lx = oneMinusT * oneMinusT * startLocal.x + 2 * oneMinusT * t * cpLocal.x + t * t * endLocal.x;
-        const ly = oneMinusT * oneMinusT * startLocal.y + 2 * oneMinusT * t * cpLocal.y + t * t * endLocal.y;
-        const scenePt = fabric.util.transformPoint(new fabric.Point(lx, ly), matrix);
-        sampledPoints.push({ x: scenePt.x, y: scenePt.y });
-      }
-      lastLocal = endLocal;
-    } else if (type === 'C') {
-      const endLocal = { x: Number(cmd[5]) - offX, y: Number(cmd[6]) - offY };
-      const scenePt = fabric.util.transformPoint(new fabric.Point(endLocal.x, endLocal.y), matrix);
-      sampledPoints.push({ x: scenePt.x, y: scenePt.y });
-      lastLocal = endLocal;
-    }
+  const supportedTypes = ['path', 'line', 'rect', 'triangle', 'ellipse', 'circle', 'polygon'];
+  if (!supportedTypes.includes(obj.type)) {
+    return { modified: false, remainingPaths: [] };
   }
 
+  const sampledPoints = getObjectSampledPoints(obj);
   if (sampledPoints.length === 0) {
     return { modified: false, remainingPaths: [] };
   }
 
-  // Determine which sampled points are hit by the eraser line segment
+  const strokeW = (obj.strokeWidth || 1) * Math.max(obj.scaleX || 1, obj.scaleY || 1);
+  const effectiveRadius = radius + strokeW / 2;
+
   let anyErased = false;
   const isPointErased = sampledPoints.map((pt) => {
     const dist = distToSegment(pt.x, pt.y, p1.x, p1.y, p2.x, p2.y);
@@ -168,9 +272,10 @@ const slicePathWithEraser = (
     return { modified: false, remainingPaths: [] };
   }
 
-  // Group remaining points into continuous chains
-  const chains: { x: number; y: number }[][] = [];
-  let currentChain: { x: number; y: number }[] = [];
+  const isClosedLoop = ['rect', 'triangle', 'ellipse', 'circle', 'polygon'].includes(obj.type);
+  
+  const chains: SampledScenePoint[][] = [];
+  let currentChain: SampledScenePoint[] = [];
 
   for (let i = 0; i < sampledPoints.length; i++) {
     if (!isPointErased[i]) {
@@ -186,19 +291,27 @@ const slicePathWithEraser = (
     chains.push(currentChain);
   }
 
-  // Create new fabric.Path for each surviving chain
+  // If it was a closed shape and neither start nor end point was erased,
+  // connect the chain wrapping around the loop so it remains one continuous open stroke
+  if (isClosedLoop && chains.length >= 2 && !isPointErased[0] && !isPointErased[sampledPoints.length - 1]) {
+    const lastChain = chains.pop()!;
+    const firstChain = chains[0];
+    chains[0] = [...lastChain, ...firstChain];
+  }
+
+  const strokeColor = obj.stroke || (useBoardStore.getState().isDarkMode ? '#ffffff' : '#000000');
   const remainingPaths: fabric.Path[] = chains.map((chain) => {
     let d = `M ${chain[0].x.toFixed(2)} ${chain[0].y.toFixed(2)}`;
     for (let i = 1; i < chain.length; i++) {
       d += ` L ${chain[i].x.toFixed(2)} ${chain[i].y.toFixed(2)}`;
     }
     return new fabric.Path(d, {
-      stroke: path.stroke,
-      strokeWidth: path.strokeWidth,
-      strokeLineCap: path.strokeLineCap || 'round',
-      strokeLineJoin: path.strokeLineJoin || 'round',
+      stroke: strokeColor,
+      strokeWidth: obj.strokeWidth || 3,
+      strokeLineCap: 'round',
+      strokeLineJoin: 'round',
       strokeUniform: true,
-      opacity: path.opacity,
+      opacity: obj.opacity ?? 1,
       fill: undefined,
       selectable: false,
       evented: false,
@@ -206,67 +319,6 @@ const slicePathWithEraser = (
   });
 
   return { modified: true, remainingPaths };
-};
-
-// Helper: Slice a fabric.Line if cut by an eraser segment
-const sliceLineWithEraser = (
-  line: fabric.Line,
-  p1: fabric.Point,
-  p2: fabric.Point,
-  radius: number
-): { modified: boolean; remainingLines: fabric.Line[] } => {
-  const matrix = line.calcTransformMatrix();
-  const start = fabric.util.transformPoint(new fabric.Point(line.x1 || 0, line.y1 || 0), matrix);
-  const end = fabric.util.transformPoint(new fabric.Point(line.x2 || 0, line.y2 || 0), matrix);
-  const strokeW = (line.strokeWidth || 1) * Math.max(line.scaleX || 1, line.scaleY || 1);
-  const effectiveRadius = radius + strokeW / 2;
-
-  const totalLen = Math.hypot(end.x - start.x, end.y - start.y);
-  if (totalLen < 1) return { modified: false, remainingLines: [] };
-
-  const steps = Math.max(2, Math.ceil(totalLen / 3));
-  const points: { x: number; y: number; erased: boolean }[] = [];
-  let anyErased = false;
-
-  for (let s = 0; s <= steps; s++) {
-    const t = s / steps;
-    const x = start.x + (end.x - start.x) * t;
-    const y = start.y + (end.y - start.y) * t;
-    const dist = distToSegment(x, y, p1.x, p1.y, p2.x, p2.y);
-    const erased = dist <= effectiveRadius;
-    if (erased) anyErased = true;
-    points.push({ x, y, erased });
-  }
-
-  if (!anyErased) return { modified: false, remainingLines: [] };
-
-  const chains: { x: number; y: number }[][] = [];
-  let currentChain: { x: number; y: number }[] = [];
-
-  for (const pt of points) {
-    if (!pt.erased) {
-      currentChain.push(pt);
-    } else {
-      if (currentChain.length >= 2) chains.push(currentChain);
-      currentChain = [];
-    }
-  }
-  if (currentChain.length >= 2) chains.push(currentChain);
-
-  const remainingLines: fabric.Line[] = chains.map((chain) => {
-    const pStart = chain[0];
-    const pEnd = chain[chain.length - 1];
-    return new fabric.Line([pStart.x, pStart.y, pEnd.x, pEnd.y], {
-      stroke: line.stroke,
-      strokeWidth: line.strokeWidth,
-      strokeUniform: true,
-      opacity: line.opacity,
-      selectable: false,
-      evented: false,
-    });
-  });
-
-  return { modified: true, remainingLines };
 };
 
 export const Board: React.FC = () => {
@@ -1443,23 +1495,12 @@ export const Board: React.FC = () => {
         for (const obj of objects) {
           if ((obj as any).name === 'a4-background' || (obj as any).name === 'a4-ruled-line') continue;
 
-          if (obj.type === 'path') {
-            const { modified, remainingPaths } = slicePathWithEraser(obj, p1, p2, radius);
-            if (modified) {
-              hasModifiedAny = true;
-              canvas.remove(obj);
-              for (const np of remainingPaths) {
-                canvas.add(np);
-              }
-            }
-          } else if (obj.type === 'line') {
-            const { modified, remainingLines } = sliceLineWithEraser(obj as fabric.Line, p1, p2, radius);
-            if (modified) {
-              hasModifiedAny = true;
-              canvas.remove(obj);
-              for (const nl of remainingLines) {
-                canvas.add(nl);
-              }
+          const { modified, remainingPaths } = sliceObjectWithEraser(obj, p1, p2, radius);
+          if (modified) {
+            hasModifiedAny = true;
+            canvas.remove(obj);
+            for (const np of remainingPaths) {
+              canvas.add(np);
             }
           }
         }
