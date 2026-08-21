@@ -102,14 +102,22 @@ export const Toolbar: React.FC = () => {
         return (
           <div key={tool.id} className="relative">
             <button
-              onClick={() => setCurrentTool(tool.id)}
+              onClick={() => {
+                if (isEraser) {
+                  setCurrentTool('eraser');
+                  setShowEraserMenu((prev) => !prev);
+                } else {
+                  setCurrentTool(tool.id);
+                  setShowEraserMenu(false);
+                }
+              }}
               onContextMenu={(e) => {
                 if (isEraser) {
                   e.preventDefault();
                   setShowEraserMenu((prev) => !prev);
                 }
               }}
-              title={tool.tooltip}
+              title={isEraser ? 'Eraser • Click for options' : tool.tooltip}
               className={`p-3 rounded-lg flex items-center justify-center transition-all ${
                 currentTool === tool.id 
                   ? (isDarkMode ? 'bg-indigo-600 text-white shadow-md' : 'bg-indigo-600 text-white shadow-md')

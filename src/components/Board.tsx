@@ -85,6 +85,190 @@ const distToSegment = (px: number, py: number, x1: number, y1: number, x2: numbe
   return Math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)));
 };
 
+// Helper: Slice a fabric.Path into surviving sub-paths when cut by an eraser segment
+const slicePathWithEraser = (
+  path: any,
+  p1: fabric.Point,
+  p2: fabric.Point,
+  radius: number
+): { modified: boolean; remainingPaths: fabric.Path[] } => {
+  if (!path || path.type !== 'path' || !Array.isArray(path.path) || path.path.length === 0) {
+    return { modified: false, remainingPaths: [] };
+  }
+
+  const offX = path.pathOffset?.x || 0;
+  const offY = path.pathOffset?.y || 0;
+  const matrix = path.calcTransformMatrix();
+  const strokeW = (path.strokeWidth || 1) * Math.max(path.scaleX || 1, path.scaleY || 1);
+  const effectiveRadius = radius + strokeW / 2;
+
+  // Sample fine points in scene space along the path
+  const sampledPoints: { x: number; y: number }[] = [];
+  let lastLocal: { x: number; y: number } | null = null;
+
+  for (const cmd of path.path) {
+    const type = cmd[0];
+    if (type === 'M' || type === 'L') {
+      const curLocal = { x: Number(cmd[1]) - offX, y: Number(cmd[2]) - offY };
+      if (!lastLocal || type === 'M') {
+        const scenePt = fabric.util.transformPoint(new fabric.Point(curLocal.x, curLocal.y), matrix);
+        sampledPoints.push({ x: scenePt.x, y: scenePt.y });
+      } else {
+        const d = Math.hypot(curLocal.x - lastLocal.x, curLocal.y - lastLocal.y);
+        const steps = Math.max(1, Math.ceil(d / 3));
+        for (let s = 1; s <= steps; s++) {
+          const t = s / steps;
+          const lx = lastLocal.x + (curLocal.x - lastLocal.x) * t;
+          const ly = lastLocal.y + (curLocal.y - lastLocal.y) * t;
+          const scenePt = fabric.util.transformPoint(new fabric.Point(lx, ly), matrix);
+          sampledPoints.push({ x: scenePt.x, y: scenePt.y });
+        }
+      }
+      lastLocal = curLocal;
+    } else if (type === 'Q') {
+      const cpLocal = { x: Number(cmd[1]) - offX, y: Number(cmd[2]) - offY };
+      const endLocal = { x: Number(cmd[3]) - offX, y: Number(cmd[4]) - offY };
+      const startLocal = lastLocal || cpLocal;
+      const d = Math.hypot(endLocal.x - startLocal.x, endLocal.y - startLocal.y);
+      const steps = Math.max(2, Math.ceil(d / 3));
+
+      for (let s = 1; s <= steps; s++) {
+        const t = s / steps;
+        const oneMinusT = 1 - t;
+        const lx = oneMinusT * oneMinusT * startLocal.x + 2 * oneMinusT * t * cpLocal.x + t * t * endLocal.x;
+        const ly = oneMinusT * oneMinusT * startLocal.y + 2 * oneMinusT * t * cpLocal.y + t * t * endLocal.y;
+        const scenePt = fabric.util.transformPoint(new fabric.Point(lx, ly), matrix);
+        sampledPoints.push({ x: scenePt.x, y: scenePt.y });
+      }
+      lastLocal = endLocal;
+    } else if (type === 'C') {
+      const endLocal = { x: Number(cmd[5]) - offX, y: Number(cmd[6]) - offY };
+      const scenePt = fabric.util.transformPoint(new fabric.Point(endLocal.x, endLocal.y), matrix);
+      sampledPoints.push({ x: scenePt.x, y: scenePt.y });
+      lastLocal = endLocal;
+    }
+  }
+
+  if (sampledPoints.length === 0) {
+    return { modified: false, remainingPaths: [] };
+  }
+
+  // Determine which sampled points are hit by the eraser line segment
+  let anyErased = false;
+  const isPointErased = sampledPoints.map((pt) => {
+    const dist = distToSegment(pt.x, pt.y, p1.x, p1.y, p2.x, p2.y);
+    if (dist <= effectiveRadius) {
+      anyErased = true;
+      return true;
+    }
+    return false;
+  });
+
+  if (!anyErased) {
+    return { modified: false, remainingPaths: [] };
+  }
+
+  // Group remaining points into continuous chains
+  const chains: { x: number; y: number }[][] = [];
+  let currentChain: { x: number; y: number }[] = [];
+
+  for (let i = 0; i < sampledPoints.length; i++) {
+    if (!isPointErased[i]) {
+      currentChain.push(sampledPoints[i]);
+    } else {
+      if (currentChain.length >= 2) {
+        chains.push(currentChain);
+      }
+      currentChain = [];
+    }
+  }
+  if (currentChain.length >= 2) {
+    chains.push(currentChain);
+  }
+
+  // Create new fabric.Path for each surviving chain
+  const remainingPaths: fabric.Path[] = chains.map((chain) => {
+    let d = `M ${chain[0].x.toFixed(2)} ${chain[0].y.toFixed(2)}`;
+    for (let i = 1; i < chain.length; i++) {
+      d += ` L ${chain[i].x.toFixed(2)} ${chain[i].y.toFixed(2)}`;
+    }
+    return new fabric.Path(d, {
+      stroke: path.stroke,
+      strokeWidth: path.strokeWidth,
+      strokeLineCap: path.strokeLineCap || 'round',
+      strokeLineJoin: path.strokeLineJoin || 'round',
+      strokeUniform: true,
+      opacity: path.opacity,
+      fill: undefined,
+      selectable: false,
+      evented: false,
+    });
+  });
+
+  return { modified: true, remainingPaths };
+};
+
+// Helper: Slice a fabric.Line if cut by an eraser segment
+const sliceLineWithEraser = (
+  line: fabric.Line,
+  p1: fabric.Point,
+  p2: fabric.Point,
+  radius: number
+): { modified: boolean; remainingLines: fabric.Line[] } => {
+  const matrix = line.calcTransformMatrix();
+  const start = fabric.util.transformPoint(new fabric.Point(line.x1 || 0, line.y1 || 0), matrix);
+  const end = fabric.util.transformPoint(new fabric.Point(line.x2 || 0, line.y2 || 0), matrix);
+  const strokeW = (line.strokeWidth || 1) * Math.max(line.scaleX || 1, line.scaleY || 1);
+  const effectiveRadius = radius + strokeW / 2;
+
+  const totalLen = Math.hypot(end.x - start.x, end.y - start.y);
+  if (totalLen < 1) return { modified: false, remainingLines: [] };
+
+  const steps = Math.max(2, Math.ceil(totalLen / 3));
+  const points: { x: number; y: number; erased: boolean }[] = [];
+  let anyErased = false;
+
+  for (let s = 0; s <= steps; s++) {
+    const t = s / steps;
+    const x = start.x + (end.x - start.x) * t;
+    const y = start.y + (end.y - start.y) * t;
+    const dist = distToSegment(x, y, p1.x, p1.y, p2.x, p2.y);
+    const erased = dist <= effectiveRadius;
+    if (erased) anyErased = true;
+    points.push({ x, y, erased });
+  }
+
+  if (!anyErased) return { modified: false, remainingLines: [] };
+
+  const chains: { x: number; y: number }[][] = [];
+  let currentChain: { x: number; y: number }[] = [];
+
+  for (const pt of points) {
+    if (!pt.erased) {
+      currentChain.push(pt);
+    } else {
+      if (currentChain.length >= 2) chains.push(currentChain);
+      currentChain = [];
+    }
+  }
+  if (currentChain.length >= 2) chains.push(currentChain);
+
+  const remainingLines: fabric.Line[] = chains.map((chain) => {
+    const pStart = chain[0];
+    const pEnd = chain[chain.length - 1];
+    return new fabric.Line([pStart.x, pStart.y, pEnd.x, pEnd.y], {
+      stroke: line.stroke,
+      strokeWidth: line.strokeWidth,
+      strokeUniform: true,
+      opacity: line.opacity,
+      selectable: false,
+      evented: false,
+    });
+  });
+
+  return { modified: true, remainingLines };
+};
+
 export const Board: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fabricRef = useRef<fabric.Canvas | null>(null);
@@ -181,16 +365,6 @@ export const Board: React.FC = () => {
         canvas.add(line);
       }
     }
-
-    // Sync any partial eraser strokes with the active page background color
-    const pageBgColor = bgType === 'solid' 
-      ? (bgColor || (isDarkMode ? '#1a1c29' : '#ffffff')) 
-      : (bgColor.split(',')[0]?.trim() || '#ffffff');
-    canvas.getObjects().forEach((obj) => {
-      if ((obj as any).name === 'partial-eraser-stroke') {
-        (obj as any).set({ stroke: pageBgColor });
-      }
-    });
 
     canvas.requestRenderAll();
   }, [pageSize, pageOrientation, isDarkMode, bgColor, bgType, isRuled, ruleColor]);
@@ -1198,67 +1372,102 @@ export const Board: React.FC = () => {
     if (currentTool === 'pan') {
       canvas.defaultCursor = 'grab';
     } else if (currentTool === 'eraser') {
-      if (eraserMode === 'partial') {
-        // --- PARTIAL ERASER (Precision Brush Mode) ---
-        canvas.isDrawingMode = true;
-        
-        const pageBgColor = bgType === 'solid' 
-          ? (bgColor || (isDarkMode ? '#1a1c29' : '#ffffff')) 
-          : (bgColor.split(',')[0]?.trim() || '#ffffff');
-        
-        const partialBrush = new fabric.PencilBrush(canvas);
-        partialBrush.color = pageBgColor;
-        partialBrush.width = eraserSize || 20;
-        canvas.freeDrawingBrush = partialBrush;
+      canvas.isDrawingMode = false;
 
-        // Custom circular eraser preview cursor
-        const cursorD = Math.max(12, Math.min(96, eraserSize || 20));
-        const cursorSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${cursorD}" height="${cursorD}" viewBox="0 0 ${cursorD} ${cursorD}"><circle cx="${cursorD/2}" cy="${cursorD/2}" r="${cursorD/2 - 1}" fill="rgba(255,255,255,0.4)" stroke="#6366f1" stroke-width="1.5"/></svg>`;
-        canvas.freeDrawingCursor = `url("data:image/svg+xml;utf8,${encodeURIComponent(cursorSvg)}") ${cursorD/2} ${cursorD/2}, crosshair`;
+      // Custom circular eraser cursor matching eraserSize
+      const cursorD = Math.max(14, Math.min(96, eraserSize || 20));
+      const cursorSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${cursorD}" height="${cursorD}" viewBox="0 0 ${cursorD} ${cursorD}"><circle cx="${cursorD/2}" cy="${cursorD/2}" r="${cursorD/2 - 1}" fill="rgba(99,102,241,0.25)" stroke="#6366f1" stroke-width="1.5"/></svg>`;
+      canvas.defaultCursor = `url("data:image/svg+xml;utf8,${encodeURIComponent(cursorSvg)}") ${cursorD/2} ${cursorD/2}, crosshair`;
 
-        canvas.on('path:created', (opt: any) => {
-          if (opt.path) {
-            opt.path.name = 'partial-eraser-stroke';
-            opt.path.strokeUniform = true;
-            opt.path.selectable = false;
-            opt.path.evented = false;
-            opt.path.strokeLineCap = 'round';
-            opt.path.strokeLineJoin = 'round';
+      let lastEraserPt: fabric.Point | null = null;
+
+      const performPartialErase = (pointerEvent: MouseEvent | fabric.TPointerEvent) => {
+        const scenePt = canvas.getScenePoint(pointerEvent);
+        if (!lastEraserPt) {
+          lastEraserPt = scenePt;
+        }
+        const p1 = lastEraserPt;
+        const p2 = scenePt;
+        const radius = (eraserSize || 20) / 2;
+
+        let hasModifiedAny = false;
+        const objects = [...canvas.getObjects()];
+
+        for (const obj of objects) {
+          if ((obj as any).name === 'a4-background' || (obj as any).name === 'a4-ruled-line') continue;
+
+          if (obj.type === 'path') {
+            const { modified, remainingPaths } = slicePathWithEraser(obj, p1, p2, radius);
+            if (modified) {
+              hasModifiedAny = true;
+              canvas.remove(obj);
+              for (const np of remainingPaths) {
+                canvas.add(np);
+              }
+            }
+          } else if (obj.type === 'line') {
+            const { modified, remainingLines } = sliceLineWithEraser(obj as fabric.Line, p1, p2, radius);
+            if (modified) {
+              hasModifiedAny = true;
+              canvas.remove(obj);
+              for (const nl of remainingLines) {
+                canvas.add(nl);
+              }
+            }
           }
-          recordState();
-        });
-      } else {
-        // --- WHOLE ERASER (Stroke / Object Mode) ---
-        canvas.isDrawingMode = false;
-        canvas.defaultCursor = 'crosshair';
+        }
 
-        canvas.on('mouse:down', (opt) => {
-          isErasing = true;
-          hasErasedInGesture = false;
+        lastEraserPt = scenePt;
+        if (hasModifiedAny) {
+          canvas.requestRenderAll();
+          return true;
+        }
+        return false;
+      };
+
+      canvas.on('mouse:down', (opt) => {
+        isErasing = true;
+        hasErasedInGesture = false;
+        lastEraserPt = canvas.getScenePoint(opt.e);
+
+        if (eraserMode === 'partial') {
+          const modified = performPartialErase(opt.e);
+          if (modified) {
+            hasErasedInGesture = true;
+          }
+        } else {
           const erased = eraseObjectAtPoint(opt.e);
           if (erased) {
             hasErasedInGesture = true;
           }
-        });
+        }
+      });
 
-        canvas.on('mouse:move', (opt) => {
-          if (isErasing) {
+      canvas.on('mouse:move', (opt) => {
+        if (isErasing) {
+          if (eraserMode === 'partial') {
+            const modified = performPartialErase(opt.e);
+            if (modified) {
+              hasErasedInGesture = true;
+            }
+          } else {
             const erased = eraseObjectAtPoint(opt.e);
             if (erased) {
               hasErasedInGesture = true;
             }
           }
-        });
+        }
+      });
 
-        canvas.on('mouse:up', () => {
-          if (isErasing) {
-            isErasing = false;
-            if (hasErasedInGesture) {
-              recordState();
-            }
+      canvas.on('mouse:up', () => {
+        if (isErasing) {
+          isErasing = false;
+          lastEraserPt = null;
+          if (hasErasedInGesture) {
+            recordState();
           }
-        });
-      }
+        }
+      });
     } else if (currentTool === 'pen' || currentTool === 'highlighter') {
       canvas.isDrawingMode = true;
       const brush = new fabric.PencilBrush(canvas);

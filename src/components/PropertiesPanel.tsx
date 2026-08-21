@@ -1,7 +1,7 @@
 import React from 'react';
 import { useBoardStore } from '../store/useBoardStore';
 import { HexColorPicker } from 'react-colorful';
-import { Palette, Eraser, CircleDot, Trash2 } from 'lucide-react';
+import { Palette } from 'lucide-react';
 
 export const PropertiesPanel: React.FC = () => {
   const { 
@@ -10,111 +10,11 @@ export const PropertiesPanel: React.FC = () => {
     strokeWidth, setStrokeWidth, 
     fillColor, setFillColor,
     isDarkMode,
-    activeTextFormat,
-    eraserMode, setEraserMode,
-    eraserSize, setEraserSize
+    activeTextFormat
   } = useBoardStore();
 
-  // If text is selected, let TextPropertiesPanel handle it
-  if (activeTextFormat) return null;
-
-  // Render Eraser Properties Panel
-  if (currentTool === 'eraser') {
-    return (
-      <div className={`fixed top-1/2 right-6 transform -translate-y-1/2 p-4 rounded-xl shadow-lg border backdrop-blur-md w-64 max-h-[80vh] overflow-y-auto custom-scrollbar z-20 ${
-        isDarkMode ? 'bg-gray-800/80 border-gray-700 text-white' : 'bg-white/80 border-gray-200 text-gray-800'
-      }`}>
-        <div className="flex items-center gap-2 mb-4">
-          <Eraser size={18} className="text-indigo-500" />
-          <h3 className="font-semibold text-sm uppercase tracking-wider opacity-80">Eraser Settings</h3>
-        </div>
-
-        {/* Mode selection */}
-        <div className="mb-5">
-          <label className="block text-[11px] font-medium uppercase tracking-wider opacity-70 mb-2">
-            Eraser Mode
-          </label>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => setEraserMode('partial')}
-              className={`p-2.5 rounded-lg border text-xs font-medium flex flex-col items-center gap-1.5 transition-all ${
-                eraserMode === 'partial'
-                  ? (isDarkMode ? 'bg-indigo-600 border-indigo-500 text-white shadow-md' : 'bg-indigo-100 border-indigo-300 text-indigo-700 font-semibold')
-                  : (isDarkMode ? 'bg-gray-800/80 border-gray-700 text-gray-300 hover:bg-gray-700' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100')
-              }`}
-            >
-              <CircleDot size={16} />
-              <span>Partial</span>
-              <span className="text-[9px] opacity-70 text-center">Erase parts</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setEraserMode('whole')}
-              className={`p-2.5 rounded-lg border text-xs font-medium flex flex-col items-center gap-1.5 transition-all ${
-                eraserMode === 'whole'
-                  ? (isDarkMode ? 'bg-indigo-600 border-indigo-500 text-white shadow-md' : 'bg-indigo-100 border-indigo-300 text-indigo-700 font-semibold')
-                  : (isDarkMode ? 'bg-gray-800/80 border-gray-700 text-gray-300 hover:bg-gray-700' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100')
-              }`}
-            >
-              <Trash2 size={16} />
-              <span>Whole</span>
-              <span className="text-[9px] opacity-70 text-center">Erase stroke</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Eraser Size (if partial mode) */}
-        {eraserMode === 'partial' && (
-          <div className="mb-5">
-            <div className="flex justify-between mb-2">
-              <span className="text-sm font-medium">Eraser Size</span>
-              <span className="text-xs bg-indigo-100 text-indigo-800 dark:bg-indigo-900/60 dark:text-indigo-300 px-2 py-0.5 rounded-full font-mono font-bold">{eraserSize}px</span>
-            </div>
-            <input 
-              type="range" 
-              min="5" 
-              max="80" 
-              value={eraserSize}
-              onChange={(e) => setEraserSize(parseInt(e.target.value))}
-              className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
-            />
-            <div className="flex justify-between gap-1 mt-2">
-              {[10, 20, 35, 50, 70].map((sz) => (
-                <button
-                  key={sz}
-                  type="button"
-                  onClick={() => setEraserSize(sz)}
-                  className={`text-[10px] px-2 py-1 rounded font-mono transition-colors ${
-                    eraserSize === sz
-                      ? 'bg-indigo-600 text-white font-bold'
-                      : isDarkMode
-                        ? 'bg-gray-800 text-gray-300 hover:bg-gray-700 border border-gray-700'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-200'
-                  }`}
-                >
-                  {sz}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Clear Canvas */}
-        <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
-          <button
-            type="button"
-            onClick={() => window.dispatchEvent(new CustomEvent('clear-canvas'))}
-            className="w-full py-2 px-3 rounded-lg text-xs font-medium text-red-500 hover:bg-red-500/10 border border-red-500/30 flex items-center justify-center gap-2 transition-colors"
-          >
-            <Trash2 size={14} />
-            <span>Erase All on Page</span>
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // If text is selected or eraser is active, don't show generic properties panel
+  if (activeTextFormat || currentTool === 'eraser') return null;
 
   const isDrawingTool = ['pen', 'highlighter', 'rectangle', 'circle', 'triangle', 'line', 'arrow', 'diamond', 'star'].includes(currentTool);
 
