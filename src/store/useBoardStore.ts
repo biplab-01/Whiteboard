@@ -45,6 +45,8 @@ export interface TextFormat {
   fontWeight: string;
   fontStyle: string;
   underline: boolean;
+  linethrough?: boolean;
+  textAlign?: 'left' | 'center' | 'right' | 'justify';
 }
 
 export interface BoardState {

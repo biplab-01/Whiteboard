@@ -14,7 +14,7 @@ export const PropertiesPanel: React.FC = () => {
 
   // Only show when a drawing/shape tool is active and no text is selected
   if (activeTextFormat) return null;
-  const isDrawingTool = ['pen', 'highlighter', 'rectangle', 'circle', 'triangle', 'line', 'arrow', 'diamond', 'star', 'text'].includes(currentTool);
+  const isDrawingTool = ['pen', 'highlighter', 'rectangle', 'circle', 'triangle', 'line', 'arrow', 'diamond', 'star'].includes(currentTool);
 
   if (!isDrawingTool) return null;
 

@@ -13,6 +13,69 @@ fabric.FabricObject.prototype.strokeUniform = true;
 fabric.FabricObject.prototype.perPixelTargetFind = true;
 (fabric.Canvas.prototype as any).targetFindTolerance = 6;
 
+// Textbox & IText scaling behavior: prevent flip
+fabric.Textbox.prototype.lockScalingFlip = true;
+fabric.IText.prototype.lockScalingFlip = true;
+
+// Helper: Normalize Textbox dimensions, scale, and controls to prevent distortion
+const normalizeTextObject = (obj: fabric.FabricObject) => {
+  if (obj.type === 'textbox' || obj.type === 'i-text') {
+    const textObj = obj as fabric.Textbox;
+    textObj.setControlsVisibility({
+      mt: false,
+      mb: false,
+    });
+    textObj.lockScalingFlip = true;
+
+    const sx = textObj.scaleX ?? 1;
+    const sy = textObj.scaleY ?? 1;
+    if (sx !== 1 || sy !== 1) {
+      const scale = sy !== 1 ? sy : sx;
+      const curFontSize = textObj.fontSize ?? 24;
+      const newFontSize = Math.max(8, Math.round(curFontSize * scale));
+      const curWidth = textObj.width ?? 200;
+      const newWidth = Math.max(40, Math.round((curWidth * sx) / scale));
+      textObj.set({
+        fontSize: newFontSize,
+        width: newWidth,
+        scaleX: 1,
+        scaleY: 1,
+      });
+      (textObj as any)._forceClearCache = true;
+      textObj.dirty = true;
+      if (typeof textObj.initDimensions === 'function') {
+        textObj.initDimensions();
+      }
+      textObj.setCoords();
+    }
+  }
+};
+
+// Helper: Thoroughly clear per-character override styles from a Textbox
+const clearStylePropertyFromAllChars = (textObj: fabric.Textbox, property: string) => {
+  if (!textObj.styles) return;
+  const styles = textObj.styles as any;
+  for (const lineIndex of Object.keys(styles)) {
+    const line = styles[lineIndex];
+    if (line) {
+      for (const charIndex of Object.keys(line)) {
+        if (line[charIndex]) {
+          delete line[charIndex][property];
+          if (Object.keys(line[charIndex]).length === 0) {
+            delete line[charIndex];
+          }
+        }
+      }
+      if (Object.keys(line).length === 0) {
+        delete styles[lineIndex];
+      }
+    }
+  }
+  if (typeof (textObj as any).removeStyle === 'function') {
+    (textObj as any).removeStyle(property);
+  }
+};
+
 // Helper: Calculate distance from a point to a line segment
 const distToSegment = (px: number, py: number, x1: number, y1: number, x2: number, y2: number) => {
   const l2 = (x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1);
@@ -352,33 +415,46 @@ export const Board: React.FC = () => {
     const handleSelectionUpdate = () => {
       const activeObj = canvas.getActiveObject();
       if (activeObj && (activeObj.type === 'i-text' || activeObj.type === 'textbox')) {
-        const textObj = activeObj as fabric.IText;
-        const styles = textObj.getSelectionStyles ? textObj.getSelectionStyles(textObj.selectionStart || 0, (textObj.selectionStart || 0) + 1)[0] : {};
-        setActiveTextFormat({
-          fontFamily: styles?.fontFamily || textObj.fontFamily || 'sans-serif',
-          fontSize: styles?.fontSize || textObj.fontSize || 24,
-          fill: (styles?.fill || textObj.fill || '#000000') as string,
-          textBackgroundColor: (styles?.textBackgroundColor || textObj.textBackgroundColor || '') as string,
-          fontWeight: (styles?.fontWeight || textObj.fontWeight || 'normal') as string,
-          fontStyle: (styles?.fontStyle || textObj.fontStyle || 'normal') as string,
-          underline: !!(styles?.underline || textObj.underline)
+        const textObj = activeObj as fabric.Textbox;
+        let styles: any = {};
+        if (textObj.isEditing && typeof textObj.getSelectionStyles === 'function') {
+          const start = textObj.selectionStart || 0;
+          const end = textObj.selectionEnd || start;
+          if (start !== end) {
+            const stylesList = textObj.getSelectionStyles(start, end);
+            if (stylesList && stylesList.length > 0) {
+              styles = stylesList[0] || {};
+            }
+          }
+        }
+
+        useBoardStore.getState().setActiveTextFormat({
+          fontFamily: styles.fontFamily ?? textObj.fontFamily ?? 'Inter',
+          fontSize: typeof styles.fontSize === 'number' ? styles.fontSize : (textObj.fontSize ?? 24),
+          fill: (styles.fill ?? textObj.fill ?? (useBoardStore.getState().isDarkMode ? '#ffffff' : '#000000')) as string,
+          textBackgroundColor: (styles.textBackgroundColor ?? textObj.textBackgroundColor ?? '') as string,
+          fontWeight: (styles.fontWeight ?? textObj.fontWeight ?? 'normal') as string,
+          fontStyle: (styles.fontStyle ?? textObj.fontStyle ?? 'normal') as string,
+          underline: styles.underline !== undefined ? !!styles.underline : !!textObj.underline,
+          linethrough: styles.linethrough !== undefined ? !!styles.linethrough : !!textObj.linethrough,
+          textAlign: (textObj.textAlign as any) || 'left',
         });
       } else {
-        setActiveTextFormat(null);
+        useBoardStore.getState().setActiveTextFormat(null);
       }
     };
 
     const onSelectionCreated = (e: any) => {
-      handleSelectionUpdate();
       if (e.selected) {
         e.selected.forEach((obj: any) => {
           obj.perPixelTargetFind = false;
+          normalizeTextObject(obj);
         });
       }
+      handleSelectionUpdate();
     };
 
     const onSelectionUpdated = (e: any) => {
-      handleSelectionUpdate();
       if (e.deselected) {
         e.deselected.forEach((obj: any) => {
           obj.perPixelTargetFind = true;
@@ -387,12 +463,14 @@ export const Board: React.FC = () => {
       if (e.selected) {
         e.selected.forEach((obj: any) => {
           obj.perPixelTargetFind = false;
+          normalizeTextObject(obj);
         });
       }
+      handleSelectionUpdate();
     };
 
     const onSelectionCleared = (e: any) => {
-      setActiveTextFormat(null);
+      useBoardStore.getState().setActiveTextFormat(null);
       if (e.deselected) {
         e.deselected.forEach((obj: any) => {
           obj.perPixelTargetFind = true;
@@ -404,13 +482,13 @@ export const Board: React.FC = () => {
     canvas.on('selection:updated', onSelectionUpdated);
     canvas.on('selection:cleared', onSelectionCleared);
     canvas.on('text:selection:changed', handleSelectionUpdate);
+    canvas.on('text:changed', handleSelectionUpdate);
 
-    // If existing text says "Click to edit", clear it automatically when entering editing mode
+    // If existing text has placeholder, select all so typing overwrites it
     canvas.on('text:editing:entered', (e: any) => {
       const target = e.target as fabric.IText;
-      if (target && target.text === 'Click to edit') {
-        target.text = '';
-        canvas.requestRenderAll();
+      if (target && (target.text === 'Click to edit' || target.text === 'Type text here')) {
+        target.selectAll();
       }
     });
 
@@ -475,15 +553,44 @@ export const Board: React.FC = () => {
     const formatTextHandler = (e: Event) => {
       const customEvent = e as CustomEvent;
       const updates = customEvent.detail;
+      if (!updates) return;
       const activeObj = canvas.getActiveObject();
       
       if (activeObj && (activeObj.type === 'i-text' || activeObj.type === 'textbox')) {
-        const textObj = activeObj as fabric.IText;
-        if (textObj.isEditing) {
-          textObj.setSelectionStyles(updates);
+        const textObj = activeObj as fabric.Textbox;
+        const isEditing = textObj.isEditing;
+        const start = textObj.selectionStart ?? 0;
+        const end = textObj.selectionEnd ?? 0;
+        const hasSelectionRange = isEditing && start !== end;
+
+        if (hasSelectionRange) {
+          // 1. Partial selection range inside editing mode: Apply styles ONLY to highlighted characters
+          textObj.setSelectionStyles(updates, start, end);
+
+          // If the user highlighted the entire text, also sync object-level defaults
+          if (start === 0 && end >= (textObj.text?.length || 0)) {
+            textObj.set(updates);
+            for (const key of Object.keys(updates)) {
+              clearStylePropertyFromAllChars(textObj, key);
+            }
+          }
         } else {
+          // 2. Whole text box selected (or cursor with no range):
+          // Alter the ENTIRE text box all at once by updating the object and purging individual character overrides
           textObj.set(updates);
+
+          for (const key of Object.keys(updates)) {
+            clearStylePropertyFromAllChars(textObj, key);
+          }
         }
+
+        // Force clear cache, re-wrap lines, recalculate dimensions and coordinate handles
+        (textObj as any)._forceClearCache = true;
+        textObj.dirty = true;
+        if (typeof textObj.initDimensions === 'function') {
+          textObj.initDimensions();
+        }
+        textObj.setCoords();
         canvas.requestRenderAll();
         recordState();
         handleSelectionUpdate();
@@ -807,6 +914,11 @@ export const Board: React.FC = () => {
           : pageToLoad.canvas_data;
 
         canvas.loadFromJSON(parsed).then(() => {
+          canvas.forEachObject((obj) => {
+            if (obj.type === 'textbox' || obj.type === 'i-text') {
+              normalizeTextObject(obj);
+            }
+          });
           renderBackground(canvas);
           canvas.requestRenderAll();
           initPageHistory(currentPageId, getCanvasSnapshot(canvas));
@@ -1125,14 +1237,14 @@ export const Board: React.FC = () => {
         };
 
         if (currentTool === 'text') {
-          // Create a blank, properly sized Textbox and activate editing immediately
+          // Create a properly styled Textbox and activate editing immediately
           const textColor = strokeColor || (isDarkMode ? '#ffffff' : '#1e293b');
-          const textbox = new fabric.Textbox('', {
+          const textbox = new fabric.Textbox('Type text here', {
             left: origX,
             top: origY,
             width: 220,
             fontSize: 24,
-            fontFamily: 'sans-serif',
+            fontFamily: 'Inter',
             fill: textColor,
             transparentCorners: false,
             borderColor: '#6366f1',
@@ -1142,6 +1254,12 @@ export const Board: React.FC = () => {
             splitByGrapheme: true,
             cursorColor: textColor,
             editable: true,
+            lockUniScaling: true,
+            lockScalingFlip: true,
+          });
+          textbox.setControlsVisibility({
+            mt: false,
+            mb: false,
           });
 
           canvas.add(textbox);
@@ -1149,7 +1267,17 @@ export const Board: React.FC = () => {
           textbox.enterEditing();
           textbox.selectAll();
           canvas.requestRenderAll();
-          recordState();
+          setActiveTextFormat({
+            fontFamily: 'Inter',
+            fontSize: 24,
+            fill: textColor,
+            textBackgroundColor: '',
+            fontWeight: 'normal',
+            fontStyle: 'normal',
+            underline: false,
+            linethrough: false,
+            textAlign: 'left'
+          });
           setCurrentTool('select');
           return;
         }
@@ -1258,8 +1386,36 @@ export const Board: React.FC = () => {
       }
     });
 
-    // Object modification hook to record history state
-    canvas.on('object:modified', () => {
+    // Ensure proportional scaling during resize
+    canvas.on('object:scaling', (e) => {
+      if (e.target && (e.target.type === 'textbox' || e.target.type === 'i-text')) {
+        const textObj = e.target as fabric.Textbox;
+        const s = Math.max(textObj.scaleX || 1, textObj.scaleY || 1);
+        textObj.scaleX = s;
+        textObj.scaleY = s;
+      }
+    });
+
+    // Object modification hook to normalize text scale into fontSize and record history state
+    canvas.on('object:modified', (e) => {
+      if (e.target) {
+        normalizeTextObject(e.target);
+        if (e.target.type === 'textbox' || e.target.type === 'i-text') {
+          const t = e.target as fabric.Textbox;
+          setActiveTextFormat({
+            fontFamily: t.fontFamily || 'Inter',
+            fontSize: t.fontSize || 24,
+            fill: (t.fill || (isDarkMode ? '#ffffff' : '#000000')) as string,
+            textBackgroundColor: (t.textBackgroundColor || '') as string,
+            fontWeight: (t.fontWeight || 'normal') as string,
+            fontStyle: (t.fontStyle || 'normal') as string,
+            underline: !!t.underline,
+            linethrough: !!t.linethrough,
+            textAlign: (t.textAlign as any) || 'left',
+          });
+        }
+        canvas.requestRenderAll();
+      }
       recordState();
     });
 
