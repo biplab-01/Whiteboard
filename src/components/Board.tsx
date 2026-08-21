@@ -108,7 +108,9 @@ export const Board: React.FC = () => {
     opacity,
     setCurrentTool,
     isDarkMode,
-    setActiveTextFormat
+    setActiveTextFormat,
+    eraserMode,
+    eraserSize
   } = useBoardStore();
 
   const currentPage = pages.find(p => p.id === currentPageId);
@@ -179,6 +181,16 @@ export const Board: React.FC = () => {
         canvas.add(line);
       }
     }
+
+    // Sync any partial eraser strokes with the active page background color
+    const pageBgColor = bgType === 'solid' 
+      ? (bgColor || (isDarkMode ? '#1a1c29' : '#ffffff')) 
+      : (bgColor.split(',')[0]?.trim() || '#ffffff');
+    canvas.getObjects().forEach((obj) => {
+      if ((obj as any).name === 'partial-eraser-stroke') {
+        (obj as any).set({ stroke: pageBgColor });
+      }
+    });
 
     canvas.requestRenderAll();
   }, [pageSize, pageOrientation, isDarkMode, bgColor, bgType, isRuled, ruleColor]);
@@ -1186,35 +1198,67 @@ export const Board: React.FC = () => {
     if (currentTool === 'pan') {
       canvas.defaultCursor = 'grab';
     } else if (currentTool === 'eraser') {
-      canvas.isDrawingMode = false;
-      canvas.defaultCursor = 'crosshair';
+      if (eraserMode === 'partial') {
+        // --- PARTIAL ERASER (Precision Brush Mode) ---
+        canvas.isDrawingMode = true;
+        
+        const pageBgColor = bgType === 'solid' 
+          ? (bgColor || (isDarkMode ? '#1a1c29' : '#ffffff')) 
+          : (bgColor.split(',')[0]?.trim() || '#ffffff');
+        
+        const partialBrush = new fabric.PencilBrush(canvas);
+        partialBrush.color = pageBgColor;
+        partialBrush.width = eraserSize || 20;
+        canvas.freeDrawingBrush = partialBrush;
 
-      canvas.on('mouse:down', (opt) => {
-        isErasing = true;
-        hasErasedInGesture = false;
-        const erased = eraseObjectAtPoint(opt.e);
-        if (erased) {
-          hasErasedInGesture = true;
-        }
-      });
+        // Custom circular eraser preview cursor
+        const cursorD = Math.max(12, Math.min(96, eraserSize || 20));
+        const cursorSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${cursorD}" height="${cursorD}" viewBox="0 0 ${cursorD} ${cursorD}"><circle cx="${cursorD/2}" cy="${cursorD/2}" r="${cursorD/2 - 1}" fill="rgba(255,255,255,0.4)" stroke="#6366f1" stroke-width="1.5"/></svg>`;
+        canvas.freeDrawingCursor = `url("data:image/svg+xml;utf8,${encodeURIComponent(cursorSvg)}") ${cursorD/2} ${cursorD/2}, crosshair`;
 
-      canvas.on('mouse:move', (opt) => {
-        if (isErasing) {
+        canvas.on('path:created', (opt: any) => {
+          if (opt.path) {
+            opt.path.name = 'partial-eraser-stroke';
+            opt.path.strokeUniform = true;
+            opt.path.selectable = false;
+            opt.path.evented = false;
+            opt.path.strokeLineCap = 'round';
+            opt.path.strokeLineJoin = 'round';
+          }
+          recordState();
+        });
+      } else {
+        // --- WHOLE ERASER (Stroke / Object Mode) ---
+        canvas.isDrawingMode = false;
+        canvas.defaultCursor = 'crosshair';
+
+        canvas.on('mouse:down', (opt) => {
+          isErasing = true;
+          hasErasedInGesture = false;
           const erased = eraseObjectAtPoint(opt.e);
           if (erased) {
             hasErasedInGesture = true;
           }
-        }
-      });
+        });
 
-      canvas.on('mouse:up', () => {
-        if (isErasing) {
-          isErasing = false;
-          if (hasErasedInGesture) {
-            recordState();
+        canvas.on('mouse:move', (opt) => {
+          if (isErasing) {
+            const erased = eraseObjectAtPoint(opt.e);
+            if (erased) {
+              hasErasedInGesture = true;
+            }
           }
-        }
-      });
+        });
+
+        canvas.on('mouse:up', () => {
+          if (isErasing) {
+            isErasing = false;
+            if (hasErasedInGesture) {
+              recordState();
+            }
+          }
+        });
+      }
     } else if (currentTool === 'pen' || currentTool === 'highlighter') {
       canvas.isDrawingMode = true;
       const brush = new fabric.PencilBrush(canvas);
@@ -1434,7 +1478,7 @@ export const Board: React.FC = () => {
       recordState();
     });
 
-  }, [currentTool, strokeColor, strokeWidth, fillColor, opacity, setCurrentTool, isDarkMode, recordState]);
+  }, [currentTool, strokeColor, strokeWidth, fillColor, opacity, setCurrentTool, isDarkMode, recordState, eraserMode, eraserSize, bgColor, bgType]);
 
   return (
     <div className={`w-full h-screen overflow-hidden ${isDarkMode ? 'bg-[#121212]' : 'bg-gray-100'}`}>

@@ -16,11 +16,19 @@ import {
   Type, 
   Image as ImageIcon,
   Calculator,
-  Trash2
+  Trash2,
+  CircleDot,
+  Check
 } from 'lucide-react';
 
 export const Toolbar: React.FC = () => {
-  const { currentTool, setCurrentTool, isDarkMode, canUndo, canRedo, undo, redo } = useBoardStore();
+  const { 
+    currentTool, setCurrentTool, 
+    isDarkMode, 
+    canUndo, canRedo, undo, redo,
+    eraserMode, setEraserMode,
+    eraserSize, setEraserSize
+  } = useBoardStore();
   const [showEraserMenu, setShowEraserMenu] = useState(false);
   const eraserMenuRef = useRef<HTMLDivElement>(null);
 
@@ -115,36 +123,95 @@ export const Toolbar: React.FC = () => {
             {isEraser && showEraserMenu && (
               <div
                 ref={eraserMenuRef}
-                className={`absolute bottom-full mb-3 left-1/2 -translate-x-1/2 w-48 p-1.5 rounded-xl shadow-2xl border backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150 z-50 ${
+                className={`absolute bottom-full mb-3 left-1/2 -translate-x-1/2 w-56 p-2 rounded-xl shadow-2xl border backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150 z-50 ${
                   isDarkMode ? 'bg-[#1a1c29]/95 border-gray-700 text-white' : 'bg-white/95 border-gray-200 text-gray-800'
                 }`}
               >
-                <div className="px-2.5 py-1 text-[10px] uppercase font-semibold text-gray-400 tracking-wider">
-                  Eraser Options
+                <div className="px-2 py-1 text-[10px] uppercase font-semibold text-gray-400 tracking-wider">
+                  Eraser Mode
                 </div>
 
+                {/* Partial Eraser Mode */}
                 <button
                   type="button"
                   onClick={() => {
+                    setEraserMode('partial');
                     setCurrentTool('eraser');
                     setShowEraserMenu(false);
                   }}
-                  className={`w-full px-2.5 py-2 rounded-lg text-xs font-medium flex items-center gap-2 transition-colors ${
-                    isDarkMode ? 'hover:bg-gray-800 text-gray-200' : 'hover:bg-gray-100 text-gray-700'
+                  className={`w-full px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition-colors ${
+                    eraserMode === 'partial'
+                      ? (isDarkMode ? 'bg-indigo-600/30 text-indigo-300 font-semibold' : 'bg-indigo-50 text-indigo-700 font-semibold')
+                      : (isDarkMode ? 'hover:bg-gray-800 text-gray-200' : 'hover:bg-gray-100 text-gray-700')
                   }`}
                 >
-                  <Eraser size={14} className="text-indigo-400" />
-                  <span>Eraser Tool (E)</span>
+                  <div className="flex items-center gap-2">
+                    <CircleDot size={14} className="text-indigo-400" />
+                    <span>Partial Eraser</span>
+                  </div>
+                  {eraserMode === 'partial' && <Check size={14} className="text-indigo-400" />}
                 </button>
 
+                {/* Whole Stroke Eraser Mode */}
                 <button
                   type="button"
-                  onClick={handleEraseAll}
-                  className="w-full px-2.5 py-2 rounded-lg text-xs font-medium flex items-center gap-2 text-red-400 hover:bg-red-500/15 transition-colors"
+                  onClick={() => {
+                    setEraserMode('whole');
+                    setCurrentTool('eraser');
+                    setShowEraserMenu(false);
+                  }}
+                  className={`w-full px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition-colors ${
+                    eraserMode === 'whole'
+                      ? (isDarkMode ? 'bg-indigo-600/30 text-indigo-300 font-semibold' : 'bg-indigo-50 text-indigo-700 font-semibold')
+                      : (isDarkMode ? 'hover:bg-gray-800 text-gray-200' : 'hover:bg-gray-100 text-gray-700')
+                  }`}
                 >
-                  <Trash2 size={14} className="text-red-400" />
-                  <span>Erase All (Clear Page)</span>
+                  <div className="flex items-center gap-2">
+                    <Eraser size={14} className="text-indigo-400" />
+                    <span>Whole Stroke Eraser</span>
+                  </div>
+                  {eraserMode === 'whole' && <Check size={14} className="text-indigo-400" />}
                 </button>
+
+                {/* Eraser Size Selector */}
+                {eraserMode === 'partial' && (
+                  <div className="my-2 pt-2 border-t border-gray-200/20">
+                    <div className="flex justify-between items-center px-1 mb-1.5 text-[10px] text-gray-400 font-medium">
+                      <span>Size</span>
+                      <span className="font-mono">{eraserSize}px</span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-1">
+                      {[10, 20, 35, 50].map((sz) => (
+                        <button
+                          key={sz}
+                          type="button"
+                          onClick={() => setEraserSize(sz)}
+                          className={`text-[10px] py-0.5 rounded font-mono transition-colors ${
+                            eraserSize === sz
+                              ? 'bg-indigo-600 text-white font-bold'
+                              : isDarkMode
+                                ? 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          {sz}px
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Erase All */}
+                <div className="pt-1.5 border-t border-gray-200/20">
+                  <button
+                    type="button"
+                    onClick={handleEraseAll}
+                    className="w-full px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 text-red-400 hover:bg-red-500/15 transition-colors"
+                  >
+                    <Trash2 size={14} className="text-red-400" />
+                    <span>Erase All (Clear Page)</span>
+                  </button>
+                </div>
               </div>
             )}
           </div>

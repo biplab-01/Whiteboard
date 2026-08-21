@@ -94,11 +94,15 @@ export interface BoardState {
   strokeWidth: number;
   fillColor: string;
   opacity: number;
+  eraserMode: 'partial' | 'whole';
+  eraserSize: number;
   setCurrentTool: (tool: ToolType) => void;
   setStrokeColor: (color: string) => void;
   setStrokeWidth: (width: number) => void;
   setFillColor: (color: string) => void;
   setOpacity: (opacity: number) => void;
+  setEraserMode: (mode: 'partial' | 'whole') => void;
+  setEraserSize: (size: number) => void;
 
   // Text Formatting
   activeTextFormat: TextFormat | null;
@@ -555,11 +559,15 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   strokeWidth: 3,
   fillColor: 'transparent',
   opacity: 1,
+  eraserMode: 'partial',
+  eraserSize: 20,
   setCurrentTool: (tool) => set({ currentTool: tool }),
   setStrokeColor: (color) => set({ strokeColor: color }),
   setStrokeWidth: (width) => set({ strokeWidth: width }),
   setFillColor: (color) => set({ fillColor: color }),
   setOpacity: (opacity) => set({ opacity }),
+  setEraserMode: (mode) => set({ eraserMode: mode }),
+  setEraserSize: (size) => set({ eraserSize: size }),
 
   activeTextFormat: null,
   setActiveTextFormat: (format) => set({ activeTextFormat: format }),
