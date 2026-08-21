@@ -597,36 +597,62 @@ export const Board: React.FC = () => {
       }
     }
 
-    // Text formatting listeners
+    // Selection formatting listeners (for both Text and Shapes)
     const handleSelectionUpdate = () => {
       const activeObj = canvas.getActiveObject();
-      if (activeObj && (activeObj.type === 'i-text' || activeObj.type === 'textbox')) {
-        const textObj = activeObj as fabric.Textbox;
-        let styles: any = {};
-        if (textObj.isEditing && typeof textObj.getSelectionStyles === 'function') {
-          const start = textObj.selectionStart || 0;
-          const end = textObj.selectionEnd || start;
-          if (start !== end) {
-            const stylesList = textObj.getSelectionStyles(start, end);
-            if (stylesList && stylesList.length > 0) {
-              styles = stylesList[0] || {};
+      if (activeObj && (activeObj as any).name !== 'a4-background' && (activeObj as any).name !== 'a4-ruled-line') {
+        if (activeObj.type === 'i-text' || activeObj.type === 'textbox') {
+          const textObj = activeObj as fabric.Textbox;
+          let styles: any = {};
+          if (textObj.isEditing && typeof textObj.getSelectionStyles === 'function') {
+            const start = textObj.selectionStart || 0;
+            const end = textObj.selectionEnd || start;
+            if (start !== end) {
+              const stylesList = textObj.getSelectionStyles(start, end);
+              if (stylesList && stylesList.length > 0) {
+                styles = stylesList[0] || {};
+              }
             }
           }
-        }
 
-        useBoardStore.getState().setActiveTextFormat({
-          fontFamily: styles.fontFamily ?? textObj.fontFamily ?? 'Inter',
-          fontSize: typeof styles.fontSize === 'number' ? styles.fontSize : (textObj.fontSize ?? 24),
-          fill: (styles.fill ?? textObj.fill ?? (useBoardStore.getState().isDarkMode ? '#ffffff' : '#000000')) as string,
-          textBackgroundColor: (styles.textBackgroundColor ?? textObj.textBackgroundColor ?? '') as string,
-          fontWeight: (styles.fontWeight ?? textObj.fontWeight ?? 'normal') as string,
-          fontStyle: (styles.fontStyle ?? textObj.fontStyle ?? 'normal') as string,
-          underline: styles.underline !== undefined ? !!styles.underline : !!textObj.underline,
-          linethrough: styles.linethrough !== undefined ? !!styles.linethrough : !!textObj.linethrough,
-          textAlign: (textObj.textAlign as any) || 'left',
-        });
+          useBoardStore.getState().setActiveShapeFormat(null);
+          useBoardStore.getState().setActiveTextFormat({
+            fontFamily: styles.fontFamily ?? textObj.fontFamily ?? 'Inter',
+            fontSize: typeof styles.fontSize === 'number' ? styles.fontSize : (textObj.fontSize ?? 24),
+            fill: (styles.fill ?? textObj.fill ?? (useBoardStore.getState().isDarkMode ? '#ffffff' : '#000000')) as string,
+            textBackgroundColor: (styles.textBackgroundColor ?? textObj.textBackgroundColor ?? '') as string,
+            fontWeight: (styles.fontWeight ?? textObj.fontWeight ?? 'normal') as string,
+            fontStyle: (styles.fontStyle ?? textObj.fontStyle ?? 'normal') as string,
+            underline: styles.underline !== undefined ? !!styles.underline : !!textObj.underline,
+            linethrough: styles.linethrough !== undefined ? !!styles.linethrough : !!textObj.linethrough,
+            textAlign: (textObj.textAlign as any) || 'left',
+          });
+        } else {
+          // Selected Shape / Path / Line / ActiveSelection
+          useBoardStore.getState().setActiveTextFormat(null);
+          
+          const stroke = (activeObj.stroke as string) || useBoardStore.getState().strokeColor;
+          const strokeWidth = typeof activeObj.strokeWidth === 'number' ? activeObj.strokeWidth : useBoardStore.getState().strokeWidth;
+          const fill = (activeObj.fill as string) || 'transparent';
+          const opacity = typeof activeObj.opacity === 'number' ? activeObj.opacity : 1;
+
+          useBoardStore.getState().setActiveShapeFormat({
+            type: activeObj.type,
+            stroke,
+            strokeWidth,
+            fill,
+            opacity
+          });
+
+          // Sync stroke & fill color in store so color pickers immediately match
+          useBoardStore.getState().setStrokeColor(stroke);
+          useBoardStore.getState().setStrokeWidth(strokeWidth);
+          useBoardStore.getState().setFillColor(fill);
+          useBoardStore.getState().setOpacity(opacity);
+        }
       } else {
         useBoardStore.getState().setActiveTextFormat(null);
+        useBoardStore.getState().setActiveShapeFormat(null);
       }
     };
 
@@ -657,6 +683,7 @@ export const Board: React.FC = () => {
 
     const onSelectionCleared = (e: any) => {
       useBoardStore.getState().setActiveTextFormat(null);
+      useBoardStore.getState().setActiveShapeFormat(null);
       if (e.deselected) {
         e.deselected.forEach((obj: any) => {
           obj.perPixelTargetFind = true;
@@ -798,11 +825,31 @@ export const Board: React.FC = () => {
       }
     };
 
+    const formatShapeHandler = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      const updates = customEvent.detail;
+      if (!updates) return;
+      const activeObj = canvas.getActiveObject();
+      if (activeObj && (activeObj as any).name !== 'a4-background' && (activeObj as any).name !== 'a4-ruled-line') {
+        if (activeObj.type === 'activeselection') {
+          (activeObj as fabric.ActiveSelection).forEachObject((obj) => {
+            obj.set(updates);
+          });
+        } else {
+          activeObj.set(updates);
+        }
+        canvas.requestRenderAll();
+        recordState();
+      }
+    };
+
     window.addEventListener('format-text', formatTextHandler);
+    window.addEventListener('format-shape', formatShapeHandler);
 
     return () => {
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('format-text', formatTextHandler);
+      window.removeEventListener('format-shape', formatShapeHandler);
       window.removeEventListener('zoom-action', zoomActionHandler);
       canvas.dispose();
       fabricRef.current = null;

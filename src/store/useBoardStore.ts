@@ -49,6 +49,14 @@ export interface TextFormat {
   textAlign?: 'left' | 'center' | 'right' | 'justify';
 }
 
+export interface ShapeFormat {
+  type: string;
+  stroke: string;
+  strokeWidth: number;
+  fill: string;
+  opacity: number;
+}
+
 export interface BoardState {
   // Library Data
   folders: FolderRow[];
@@ -104,9 +112,11 @@ export interface BoardState {
   setEraserMode: (mode: 'partial' | 'whole') => void;
   setEraserSize: (size: number) => void;
 
-  // Text Formatting
+  // Text & Shape Formatting
   activeTextFormat: TextFormat | null;
   setActiveTextFormat: (format: TextFormat | null) => void;
+  activeShapeFormat: ShapeFormat | null;
+  setActiveShapeFormat: (format: ShapeFormat | null) => void;
 
   // History / Undo & Redo
   canUndo: boolean;
@@ -571,6 +581,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
   activeTextFormat: null,
   setActiveTextFormat: (format) => set({ activeTextFormat: format }),
+  activeShapeFormat: null,
+  setActiveShapeFormat: (format) => set({ activeShapeFormat: format }),
 
   canUndo: false,
   canRedo: false,
