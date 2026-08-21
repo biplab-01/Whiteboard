@@ -6,10 +6,6 @@ import {
   Italic, 
   Underline, 
   Strikethrough, 
-  AlignLeft, 
-  AlignCenter, 
-  AlignRight, 
-  AlignJustify,
   Type,
   Palette,
   Highlighter
@@ -155,13 +151,12 @@ export const TextPropertiesPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* Formatting & Alignment */}
-      <div className="mb-4 space-y-2">
-        <label className="block text-[11px] font-medium uppercase tracking-wider opacity-70">
-          Style & Alignment
+      {/* Style Toggles (Bold, Italic, Underline, Strikethrough) */}
+      <div className="mb-4">
+        <label className="block text-[11px] font-medium uppercase tracking-wider opacity-70 mb-1.5">
+          Style
         </label>
         
-        {/* Style Toggles */}
         <div className="grid grid-cols-4 gap-1.5">
           {/* Bold */}
           <button 
@@ -217,61 +212,6 @@ export const TextPropertiesPanel: React.FC = () => {
             }`}
           >
             <Strikethrough size={15} />
-          </button>
-        </div>
-
-        {/* Alignment Toggles */}
-        <div className="grid grid-cols-4 gap-1.5">
-          <button 
-            type="button"
-            title="Align Left"
-            onClick={() => handleFormatChange({ textAlign: 'left' })}
-            className={`p-2 rounded-lg border transition-all flex items-center justify-center ${
-              (activeTextFormat.textAlign || 'left') === 'left'
-                ? (isDarkMode ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-indigo-100 border-indigo-300 text-indigo-700')
-                : (isDarkMode ? 'bg-gray-800/80 border-gray-700 text-gray-300 hover:bg-gray-700' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100')
-            }`}
-          >
-            <AlignLeft size={15} />
-          </button>
-
-          <button 
-            type="button"
-            title="Align Center"
-            onClick={() => handleFormatChange({ textAlign: 'center' })}
-            className={`p-2 rounded-lg border transition-all flex items-center justify-center ${
-              activeTextFormat.textAlign === 'center'
-                ? (isDarkMode ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-indigo-100 border-indigo-300 text-indigo-700')
-                : (isDarkMode ? 'bg-gray-800/80 border-gray-700 text-gray-300 hover:bg-gray-700' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100')
-            }`}
-          >
-            <AlignCenter size={15} />
-          </button>
-
-          <button 
-            type="button"
-            title="Align Right"
-            onClick={() => handleFormatChange({ textAlign: 'right' })}
-            className={`p-2 rounded-lg border transition-all flex items-center justify-center ${
-              activeTextFormat.textAlign === 'right'
-                ? (isDarkMode ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-indigo-100 border-indigo-300 text-indigo-700')
-                : (isDarkMode ? 'bg-gray-800/80 border-gray-700 text-gray-300 hover:bg-gray-700' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100')
-            }`}
-          >
-            <AlignRight size={15} />
-          </button>
-
-          <button 
-            type="button"
-            title="Justify"
-            onClick={() => handleFormatChange({ textAlign: 'justify' })}
-            className={`p-2 rounded-lg border transition-all flex items-center justify-center ${
-              activeTextFormat.textAlign === 'justify'
-                ? (isDarkMode ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-indigo-100 border-indigo-300 text-indigo-700')
-                : (isDarkMode ? 'bg-gray-800/80 border-gray-700 text-gray-300 hover:bg-gray-700' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100')
-            }`}
-          >
-            <AlignJustify size={15} />
           </button>
         </div>
       </div>
