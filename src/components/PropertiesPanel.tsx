@@ -1,7 +1,23 @@
 import React from 'react';
 import { useBoardStore } from '../store/useBoardStore';
 import { HexColorPicker } from 'react-colorful';
-import { Palette, BringToFront, SendToBack, ChevronUp, ChevronDown, Copy, Trash2, Layers } from 'lucide-react';
+import { 
+  Palette, 
+  BringToFront, 
+  SendToBack, 
+  ChevronUp, 
+  ChevronDown, 
+  Copy, 
+  Trash2, 
+  Layers,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  AlignStartVertical,
+  AlignCenterVertical,
+  AlignEndVertical,
+  Maximize2
+} from 'lucide-react';
 
 export const PropertiesPanel: React.FC = () => {
   const { 
@@ -12,7 +28,8 @@ export const PropertiesPanel: React.FC = () => {
     opacity, setOpacity,
     isDarkMode,
     activeTextFormat,
-    activeShapeFormat
+    activeShapeFormat,
+    setActiveShapeFormat
   } = useBoardStore();
 
   // If text is selected or eraser is active, don't show generic shape properties panel
@@ -36,7 +53,15 @@ export const PropertiesPanel: React.FC = () => {
     if (updates.stroke !== undefined) setStrokeColor(updates.stroke);
     if (updates.strokeWidth !== undefined) setStrokeWidth(updates.strokeWidth);
     if (updates.fill !== undefined) setFillColor(updates.fill);
-    if (updates.opacity !== undefined) setOpacity(updates.opacity);
+    if (updates.opacity !== undefined) {
+      setOpacity(updates.opacity);
+      if (activeShapeFormat) {
+        setActiveShapeFormat({
+          ...activeShapeFormat,
+          opacity: updates.opacity
+        });
+      }
+    }
     if (isShapeSelected) {
       window.dispatchEvent(new CustomEvent('format-shape', { detail: updates }));
     }
@@ -44,6 +69,10 @@ export const PropertiesPanel: React.FC = () => {
 
   const handleArrange = (action: 'bring-to-front' | 'send-to-back' | 'bring-forward' | 'send-backward') => {
     window.dispatchEvent(new CustomEvent('arrange-object', { detail: { action } }));
+  };
+
+  const handleAlign = (alignment: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom' | 'center-page') => {
+    window.dispatchEvent(new CustomEvent('align-object', { detail: { alignment } }));
   };
 
   const handleDuplicate = () => {
@@ -144,6 +173,88 @@ export const PropertiesPanel: React.FC = () => {
               <Trash2 size={13} />
               <span>Delete</span>
             </button>
+          </div>
+
+          {/* Alignment Controls */}
+          <div className="mt-3 pt-3 border-t border-gray-200/20">
+            <span className="text-[11px] font-medium opacity-70 block mb-1.5">Page Alignment</span>
+            <div className="grid grid-cols-4 gap-1 mb-1.5">
+              <button
+                type="button"
+                onClick={() => handleAlign('left')}
+                className={`p-1.5 rounded-lg border text-xs flex items-center justify-center transition-all ${
+                  isDarkMode ? 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
+                }`}
+                title="Align Left"
+              >
+                <AlignLeft size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleAlign('center')}
+                className={`p-1.5 rounded-lg border text-xs flex items-center justify-center transition-all ${
+                  isDarkMode ? 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
+                }`}
+                title="Align Horizontal Center"
+              >
+                <AlignCenter size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleAlign('right')}
+                className={`p-1.5 rounded-lg border text-xs flex items-center justify-center transition-all ${
+                  isDarkMode ? 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
+                }`}
+                title="Align Right"
+              >
+                <AlignRight size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleAlign('center-page')}
+                className={`p-1.5 rounded-lg border text-xs flex items-center justify-center text-indigo-400 transition-all ${
+                  isDarkMode ? 'bg-gray-800 hover:bg-gray-700 border-gray-700' : 'bg-gray-50 hover:bg-gray-100 border-gray-200'
+                }`}
+                title="Center on Page"
+              >
+                <Maximize2 size={13} />
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-1">
+              <button
+                type="button"
+                onClick={() => handleAlign('top')}
+                className={`p-1.5 rounded-lg border text-xs flex items-center justify-center gap-1 transition-all ${
+                  isDarkMode ? 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
+                }`}
+                title="Align Top"
+              >
+                <AlignStartVertical size={13} />
+                <span className="text-[10px]">Top</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleAlign('middle')}
+                className={`p-1.5 rounded-lg border text-xs flex items-center justify-center gap-1 transition-all ${
+                  isDarkMode ? 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
+                }`}
+                title="Align Middle"
+              >
+                <AlignCenterVertical size={13} />
+                <span className="text-[10px]">Middle</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleAlign('bottom')}
+                className={`p-1.5 rounded-lg border text-xs flex items-center justify-center gap-1 transition-all ${
+                  isDarkMode ? 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
+                }`}
+                title="Align Bottom"
+              >
+                <AlignEndVertical size={13} />
+                <span className="text-[10px]">Bottom</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

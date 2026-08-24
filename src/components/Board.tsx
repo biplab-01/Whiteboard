@@ -4,7 +4,24 @@ import { useBoardStore, getPageDimensions } from '../store/useBoardStore';
 import * as pdfjsLib from 'pdfjs-dist';
 // For Vite we can import the worker as a URL
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
-import { BringToFront, SendToBack, ChevronUp, ChevronDown, Copy, Trash2 } from 'lucide-react';
+import { 
+  BringToFront, 
+  SendToBack, 
+  ChevronUp, 
+  ChevronDown, 
+  Copy, 
+  Trash2,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  AlignStartVertical,
+  AlignCenterVertical,
+  AlignEndVertical,
+  Maximize2,
+  FlipHorizontal,
+  FlipVertical,
+  Layers
+} from 'lucide-react';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -904,6 +921,20 @@ export const Board: React.FC = () => {
       }
     };
 
+    const alignObjectHandler = (e: Event) => {
+      const customEvent = e as CustomEvent<{ alignment: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom' | 'center-page' }>;
+      if (customEvent.detail?.alignment) {
+        alignActiveObject(customEvent.detail.alignment);
+      }
+    };
+
+    const flipObjectHandler = (e: Event) => {
+      const customEvent = e as CustomEvent<{ direction: 'horizontal' | 'vertical' }>;
+      if (customEvent.detail?.direction) {
+        flipActiveObject(customEvent.detail.direction);
+      }
+    };
+
     const duplicateObjectHandler = () => {
       duplicateActiveObject();
     };
@@ -915,6 +946,8 @@ export const Board: React.FC = () => {
     window.addEventListener('format-text', formatTextHandler);
     window.addEventListener('format-shape', formatShapeHandler);
     window.addEventListener('arrange-object', arrangeObjectHandler);
+    window.addEventListener('align-object', alignObjectHandler);
+    window.addEventListener('flip-object', flipObjectHandler);
     window.addEventListener('duplicate-object', duplicateObjectHandler);
     window.addEventListener('delete-object', deleteObjectHandler);
 
@@ -923,6 +956,8 @@ export const Board: React.FC = () => {
       window.removeEventListener('format-text', formatTextHandler);
       window.removeEventListener('format-shape', formatShapeHandler);
       window.removeEventListener('arrange-object', arrangeObjectHandler);
+      window.removeEventListener('align-object', alignObjectHandler);
+      window.removeEventListener('flip-object', flipObjectHandler);
       window.removeEventListener('duplicate-object', duplicateObjectHandler);
       window.removeEventListener('delete-object', deleteObjectHandler);
       window.removeEventListener('zoom-action', zoomActionHandler);
@@ -952,6 +987,95 @@ export const Board: React.FC = () => {
         recordState();
       }
     }
+  }, [recordState]);
+
+  // Align active object or selection relative to the page
+  const alignActiveObject = useCallback((alignment: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom' | 'center-page') => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+    const activeObj = canvas.getActiveObject();
+    if (!activeObj || (activeObj as any).name === 'a4-background' || (activeObj as any).name === 'a4-ruled-line') return;
+
+    const { width: pageW, height: pageH } = getPageDimensions(pageSize, pageOrientation);
+    const pageX = (canvas.width! - pageW) / 2;
+    const pageY = Math.max(50, (canvas.height! - pageH) / 2);
+
+    const objW = activeObj.getScaledWidth();
+    const objH = activeObj.getScaledHeight();
+
+    switch (alignment) {
+      case 'left':
+        activeObj.set({ left: pageX + 24 });
+        break;
+      case 'center':
+        activeObj.set({ left: pageX + (pageW - objW) / 2 });
+        break;
+      case 'right':
+        activeObj.set({ left: pageX + pageW - objW - 24 });
+        break;
+      case 'top':
+        activeObj.set({ top: pageY + 24 });
+        break;
+      case 'middle':
+        activeObj.set({ top: pageY + (pageH - objH) / 2 });
+        break;
+      case 'bottom':
+        activeObj.set({ top: pageY + pageH - objH - 24 });
+        break;
+      case 'center-page':
+        activeObj.set({
+          left: pageX + (pageW - objW) / 2,
+          top: pageY + (pageH - objH) / 2
+        });
+        break;
+    }
+
+    activeObj.setCoords();
+    canvas.requestRenderAll();
+    recordState();
+  }, [pageSize, pageOrientation, recordState]);
+
+  // Flip active object
+  const flipActiveObject = useCallback((direction: 'horizontal' | 'vertical') => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+    const activeObj = canvas.getActiveObject();
+    if (!activeObj || (activeObj as any).name === 'a4-background' || (activeObj as any).name === 'a4-ruled-line') return;
+
+    if (direction === 'horizontal') {
+      activeObj.set('flipX', !activeObj.flipX);
+    } else {
+      activeObj.set('flipY', !activeObj.flipY);
+    }
+    activeObj.setCoords();
+    canvas.requestRenderAll();
+    recordState();
+  }, [recordState]);
+
+  // Set opacity on active object and synchronize with store
+  const setObjectOpacity = useCallback((newOpacity: number) => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+    const activeObj = canvas.getActiveObject();
+    if (!activeObj || (activeObj as any).name === 'a4-background' || (activeObj as any).name === 'a4-ruled-line') return;
+
+    if (activeObj.type === 'activeselection') {
+      (activeObj as fabric.ActiveSelection).forEachObject(obj => {
+        obj.set({ opacity: newOpacity });
+      });
+    } else {
+      activeObj.set({ opacity: newOpacity });
+    }
+
+    // Synchronize store
+    useBoardStore.getState().setOpacity(newOpacity);
+    const shapeFormat = useBoardStore.getState().activeShapeFormat;
+    if (shapeFormat) {
+      useBoardStore.getState().setActiveShapeFormat({ ...shapeFormat, opacity: newOpacity });
+    }
+
+    canvas.requestRenderAll();
+    recordState();
   }, [recordState]);
 
   // Arrange object layer order (Bring to Front, Send to Back, Bring Forward, Send Backward)
@@ -2006,15 +2130,21 @@ export const Board: React.FC = () => {
       {/* Right-click Context Menu */}
       {contextMenu && (
         <div 
-          className={`fixed z-50 py-1.5 px-1 rounded-xl shadow-2xl border backdrop-blur-xl animate-in fade-in zoom-in-95 duration-100 min-w-[195px] ${
-            isDarkMode ? 'bg-[#1a1c29]/95 border-gray-700 text-gray-200' : 'bg-white/95 border-gray-200 text-gray-800 shadow-xl shadow-black/10'
+          className={`fixed z-50 py-2 px-1.5 rounded-2xl shadow-2xl border backdrop-blur-xl animate-in fade-in zoom-in-95 duration-100 w-56 max-h-[90vh] overflow-y-auto custom-scrollbar ${
+            isDarkMode ? 'bg-[#1a1c29]/95 border-gray-700 text-gray-200 shadow-black/60' : 'bg-white/95 border-gray-200 text-gray-800 shadow-xl shadow-black/10'
           }`}
           style={{ 
-            left: Math.min(contextMenu.x, window.innerWidth - 215), 
-            top: Math.min(contextMenu.y, window.innerHeight - 265) 
+            left: Math.min(contextMenu.x, window.innerWidth - 240), 
+            top: Math.min(contextMenu.y, window.innerHeight - 440) 
           }}
           onClick={(e) => e.stopPropagation()}
         >
+          {/* Layer Order Section */}
+          <div className="px-2 py-1 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider opacity-60">
+            <span>Layer Order</span>
+            <Layers size={12} className="text-indigo-400" />
+          </div>
+
           <button
             type="button"
             onClick={() => {
@@ -2076,7 +2206,183 @@ export const Board: React.FC = () => {
             <span className="text-[10px] opacity-50 font-mono">Ctrl+[</span>
           </button>
 
-          <div className={`my-1 border-t ${isDarkMode ? 'border-gray-700/60' : 'border-gray-200'}`} />
+          {/* Alignment Section */}
+          <div className={`my-1.5 border-t ${isDarkMode ? 'border-gray-700/60' : 'border-gray-200'}`} />
+          <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider opacity-60">
+            <span>Alignment</span>
+          </div>
+
+          <div className="grid grid-cols-4 gap-1 px-1.5 mb-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                alignActiveObject('left');
+                setContextMenu(null);
+              }}
+              className={`p-1.5 rounded-lg border text-xs flex items-center justify-center transition-colors ${
+                isDarkMode ? 'bg-white/5 hover:bg-white/10 border-gray-700' : 'bg-gray-50 hover:bg-gray-100 border-gray-200'
+              }`}
+              title="Align Left"
+            >
+              <AlignLeft size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                alignActiveObject('center');
+                setContextMenu(null);
+              }}
+              className={`p-1.5 rounded-lg border text-xs flex items-center justify-center transition-colors ${
+                isDarkMode ? 'bg-white/5 hover:bg-white/10 border-gray-700' : 'bg-gray-50 hover:bg-gray-100 border-gray-200'
+              }`}
+              title="Align Horizontal Center"
+            >
+              <AlignCenter size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                alignActiveObject('right');
+                setContextMenu(null);
+              }}
+              className={`p-1.5 rounded-lg border text-xs flex items-center justify-center transition-colors ${
+                isDarkMode ? 'bg-white/5 hover:bg-white/10 border-gray-700' : 'bg-gray-50 hover:bg-gray-100 border-gray-200'
+              }`}
+              title="Align Right"
+            >
+              <AlignRight size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                alignActiveObject('center-page');
+                setContextMenu(null);
+              }}
+              className={`p-1.5 rounded-lg border text-xs flex items-center justify-center text-indigo-400 transition-colors ${
+                isDarkMode ? 'bg-white/5 hover:bg-white/10 border-gray-700' : 'bg-gray-50 hover:bg-gray-100 border-gray-200'
+              }`}
+              title="Center on Page"
+            >
+              <Maximize2 size={13} />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-3 gap-1 px-1.5 mb-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                alignActiveObject('top');
+                setContextMenu(null);
+              }}
+              className={`p-1.5 rounded-lg border text-xs flex items-center justify-center gap-1 transition-colors ${
+                isDarkMode ? 'bg-white/5 hover:bg-white/10 border-gray-700' : 'bg-gray-50 hover:bg-gray-100 border-gray-200'
+              }`}
+              title="Align Top"
+            >
+              <AlignStartVertical size={13} />
+              <span className="text-[10px]">Top</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                alignActiveObject('middle');
+                setContextMenu(null);
+              }}
+              className={`p-1.5 rounded-lg border text-xs flex items-center justify-center gap-1 transition-colors ${
+                isDarkMode ? 'bg-white/5 hover:bg-white/10 border-gray-700' : 'bg-gray-50 hover:bg-gray-100 border-gray-200'
+              }`}
+              title="Align Middle"
+            >
+              <AlignCenterVertical size={13} />
+              <span className="text-[10px]">Mid</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                alignActiveObject('bottom');
+                setContextMenu(null);
+              }}
+              className={`p-1.5 rounded-lg border text-xs flex items-center justify-center gap-1 transition-colors ${
+                isDarkMode ? 'bg-white/5 hover:bg-white/10 border-gray-700' : 'bg-gray-50 hover:bg-gray-100 border-gray-200'
+              }`}
+              title="Align Bottom"
+            >
+              <AlignEndVertical size={13} />
+              <span className="text-[10px]">Bot</span>
+            </button>
+          </div>
+
+          {/* Opacity Control */}
+          <div className={`my-1.5 border-t ${isDarkMode ? 'border-gray-700/60' : 'border-gray-200'}`} />
+          <div className="px-2 py-1">
+            <div className="flex justify-between items-center mb-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wider opacity-60">Opacity</span>
+              <span className="text-[11px] font-mono opacity-80 font-bold">{Math.round(opacity * 100)}%</span>
+            </div>
+            <input 
+              type="range" 
+              min="0.05" 
+              max="1" 
+              step="0.05"
+              value={opacity}
+              onChange={(e) => setObjectOpacity(parseFloat(e.target.value))}
+              className="w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-600 mb-1.5"
+            />
+            <div className="grid grid-cols-4 gap-1">
+              {[0.25, 0.5, 0.75, 1].map((val) => (
+                <button
+                  key={val}
+                  type="button"
+                  onClick={() => setObjectOpacity(val)}
+                  className={`text-[10px] py-0.5 rounded font-mono border transition-colors ${
+                    Math.abs(opacity - val) < 0.03
+                      ? 'bg-indigo-600 text-white font-bold border-indigo-500'
+                      : isDarkMode
+                        ? 'bg-white/5 hover:bg-white/10 text-gray-300 border-gray-700'
+                        : 'bg-gray-50 hover:bg-gray-100 text-gray-700 border-gray-200'
+                  }`}
+                >
+                  {Math.round(val * 100)}%
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Transform (Flip) */}
+          <div className={`my-1.5 border-t ${isDarkMode ? 'border-gray-700/60' : 'border-gray-200'}`} />
+          <div className="grid grid-cols-2 gap-1 px-1.5 mb-1">
+            <button
+              type="button"
+              onClick={() => {
+                flipActiveObject('horizontal');
+                setContextMenu(null);
+              }}
+              className={`flex items-center justify-center gap-1.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                isDarkMode ? 'bg-white/5 hover:bg-white/10 text-gray-200 border-gray-700' : 'bg-gray-50 hover:bg-gray-100 text-gray-800 border-gray-200'
+              }`}
+              title="Flip Horizontal"
+            >
+              <FlipHorizontal size={13} className="text-indigo-400" />
+              <span className="text-[11px]">Flip X</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                flipActiveObject('vertical');
+                setContextMenu(null);
+              }}
+              className={`flex items-center justify-center gap-1.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                isDarkMode ? 'bg-white/5 hover:bg-white/10 text-gray-200 border-gray-700' : 'bg-gray-50 hover:bg-gray-100 text-gray-800 border-gray-200'
+              }`}
+              title="Flip Vertical"
+            >
+              <FlipVertical size={13} className="text-indigo-400" />
+              <span className="text-[11px]">Flip Y</span>
+            </button>
+          </div>
+
+          {/* Duplicate & Delete Actions */}
+          <div className={`my-1.5 border-t ${isDarkMode ? 'border-gray-700/60' : 'border-gray-200'}`} />
 
           <button
             type="button"
