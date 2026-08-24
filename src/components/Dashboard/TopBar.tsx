@@ -1,13 +1,14 @@
-import { Moon, Search, Sun, LogOut, Plus } from 'lucide-react';
+import { Moon, Search, Sun, LogOut, Plus, FileUp } from 'lucide-react';
 import { useBoardStore } from '../../store/useBoardStore';
 import { useAuthStore } from '../../store/useAuthStore';
 
 interface TopBarProps {
   searchQuery: string;
   setSearchQuery: (q: string) => void;
+  onOpenImportModal: () => void;
 }
 
-export const TopBar = ({ searchQuery, setSearchQuery }: TopBarProps) => {
+export const TopBar = ({ searchQuery, setSearchQuery, onOpenImportModal }: TopBarProps) => {
   const { isDarkMode, toggleTheme, createNotebook, openNotebook } = useBoardStore();
   const { user, signOut, setShowAuthModal } = useAuthStore();
   
@@ -57,6 +58,14 @@ export const TopBar = ({ searchQuery, setSearchQuery }: TopBarProps) => {
           className={`p-2 rounded-full transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-gray-400 hover:text-yellow-400' : 'hover:bg-gray-200 text-gray-600 hover:text-indigo-600'}`}
         >
           {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
+        </button>
+
+        <button 
+          onClick={onOpenImportModal}
+          className="flex items-center gap-1.5 bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-600 hover:to-emerald-700 text-white px-3.5 py-2 rounded-lg text-sm font-medium transition-all shadow-md shadow-teal-500/20 hover:scale-[1.02]"
+          title="Import multiple PDFs as separate notes"
+        >
+          <FileUp size={16} /> Import Docs
         </button>
         
         <button 

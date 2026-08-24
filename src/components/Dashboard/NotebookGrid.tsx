@@ -1,14 +1,15 @@
 import { useBoardStore } from '../../store/useBoardStore';
 import { NotebookCard } from './NotebookCard';
-import { Plus } from 'lucide-react';
+import { Plus, FileUp } from 'lucide-react';
 import { useAuthStore } from '../../store/useAuthStore';
 
 interface NotebookGridProps {
   currentView: string;
   searchQuery: string;
+  onOpenImportModal: () => void;
 }
 
-export const NotebookGrid = ({ currentView, searchQuery }: NotebookGridProps) => {
+export const NotebookGrid = ({ currentView, searchQuery, onOpenImportModal }: NotebookGridProps) => {
   const { notebooks, folders, createNotebook, isDarkMode, openNotebook } = useBoardStore();
   const { user } = useAuthStore();
 
@@ -49,12 +50,29 @@ export const NotebookGrid = ({ currentView, searchQuery }: NotebookGridProps) =>
         {/* Create New Card */}
         <button 
           onClick={handleCreateInView}
-          className={`flex flex-col items-center justify-center rounded-2xl border-2 border-dashed aspect-[4/3] transition-colors ${
-            isDarkMode ? 'border-white/10 hover:border-white/20 hover:bg-[#1a1c29]/50 text-gray-400 hover:text-gray-200' : 'border-gray-300 hover:border-indigo-400 hover:bg-indigo-50 text-gray-500 hover:text-indigo-600'
+          className={`flex flex-col items-center justify-center rounded-2xl border-2 border-dashed aspect-[4/3] transition-all hover:scale-[1.02] ${
+            isDarkMode ? 'border-white/10 hover:border-indigo-500/50 hover:bg-indigo-500/5 text-gray-400 hover:text-gray-200' : 'border-gray-300 hover:border-indigo-400 hover:bg-indigo-50 text-gray-500 hover:text-indigo-600'
           }`}
         >
-          <Plus size={32} className="mb-2" />
-          <span className="font-medium">New notebook</span>
+          <div className="p-2.5 rounded-xl bg-indigo-500/10 mb-2 text-indigo-400">
+            <Plus size={24} />
+          </div>
+          <span className="font-semibold text-sm">New notebook</span>
+        </button>
+
+        {/* Import Docs Card */}
+        <button 
+          onClick={onOpenImportModal}
+          className={`flex flex-col items-center justify-center rounded-2xl border-2 border-dashed aspect-[4/3] transition-all hover:scale-[1.02] ${
+            isDarkMode ? 'border-teal-500/20 hover:border-teal-500/60 hover:bg-teal-500/5 text-teal-400/80 hover:text-teal-300' : 'border-teal-300/80 hover:border-teal-500 hover:bg-teal-50/60 text-teal-700'
+          }`}
+          title="Import multiple PDFs as separate notebooks"
+        >
+          <div className="p-2.5 rounded-xl bg-teal-500/10 mb-2 text-teal-400">
+            <FileUp size={24} />
+          </div>
+          <span className="font-semibold text-sm">Import Docs</span>
+          <span className="text-[11px] opacity-60">Batch PDF to Notes</span>
         </button>
 
         {filteredNotebooks.map(notebook => (

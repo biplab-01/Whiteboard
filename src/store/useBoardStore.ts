@@ -70,6 +70,7 @@ export interface BoardState {
   createFolder: (name: string, userId: string) => Promise<void>;
   deleteFolder: (id: string) => Promise<void>;
   createNotebook: (name: string, folderId: string | null, userId: string) => Promise<string>;
+  createNotebookWithPages: (name: string, folderId: string | null, userId: string, pages: { canvasData: string; name?: string }[]) => Promise<string>;
   renameNotebook: (id: string, name: string) => Promise<void>;
   deleteNotebook: (id: string) => Promise<void>;
   moveNotebook: (notebookId: string, folderId: string | null) => Promise<void>;
@@ -314,6 +315,75 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     }).then(({ error }) => {
       if (error) {
         console.warn('Supabase createNotebook offline, kept local:', error);
+      }
+    });
+
+    return newNotebook.id;
+  },
+
+  createNotebookWithPages: async (name, folderId, userId, pages) => {
+    const newNotebook: NotebookRow = {
+      id: `nb_${Math.random().toString(36).substring(2, 9)}_${Date.now()}`,
+      name: name.trim() || 'Imported Document',
+      folder_id: folderId,
+      user_id: userId,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    const updatedNotebooks = [newNotebook, ...get().notebooks];
+    set({ notebooks: updatedNotebooks });
+    setLocalData(STORAGE_KEYS.NOTEBOOKS, updatedNotebooks);
+
+    const now = new Date().toISOString();
+    const createdPages: PageRow[] = (pages.length > 0 ? pages : [{ canvasData: null, name: 'Page 1' }]).map((p, idx) => ({
+      id: `page_${Math.random().toString(36).substring(2, 9)}_${Date.now()}_${idx}`,
+      notebook_id: newNotebook.id,
+      user_id: userId,
+      name: p.name || `Page ${idx + 1}`,
+      order_index: idx,
+      canvas_data: (p.canvasData || null) as any,
+      created_at: now,
+      updated_at: now,
+    }));
+
+    const allPages = await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []));
+    setLocalData(STORAGE_KEYS.PAGES, [...allPages, ...createdPages]);
+
+    // Save page background settings for all pages
+    const pageBgMap = await getIdbItem<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, getLocalData<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {}));
+    createdPages.forEach(p => {
+      pageBgMap[p.id] = {
+        bgType: 'solid',
+        bgColor: '#ffffff',
+        isRuled: false,
+        ruleColor: '#e2e8f0',
+        pageSize: 'a4',
+        pageOrientation: 'portrait'
+      };
+    });
+    setLocalData(STORAGE_KEYS.PAGE_BG_SETTINGS, pageBgMap);
+
+    // Sync to Supabase in background
+    supabase.from('notebooks').insert({ 
+      id: newNotebook.id,
+      name: newNotebook.name, 
+      folder_id: folderId, 
+      user_id: userId 
+    }).then(async ({ error }) => {
+      if (error) {
+        console.warn('Supabase createNotebookWithPages offline, kept local:', error);
+      } else {
+        for (const p of createdPages) {
+          await supabase.from('pages').insert({
+            id: p.id,
+            notebook_id: newNotebook.id,
+            user_id: userId,
+            name: p.name,
+            order_index: p.order_index,
+            canvas_data: p.canvas_data,
+          });
+        }
       }
     });
 
