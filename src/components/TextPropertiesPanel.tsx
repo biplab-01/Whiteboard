@@ -8,21 +8,7 @@ import {
   Strikethrough, 
   Type, 
   Palette, 
-  Highlighter,
-  BringToFront,
-  SendToBack,
-  ChevronUp,
-  ChevronDown,
-  Copy,
-  Trash2,
-  Layers,
-  AlignLeft,
-  AlignCenter,
-  AlignRight,
-  AlignStartVertical,
-  AlignCenterVertical,
-  AlignEndVertical,
-  Maximize2
+  Highlighter
 } from 'lucide-react';
 import { HexColorPicker } from 'react-colorful';
 
@@ -44,25 +30,9 @@ export const TextPropertiesPanel: React.FC = () => {
     window.dispatchEvent(new CustomEvent('format-text', { detail: updates }));
   };
 
-  const handleArrange = (action: 'bring-to-front' | 'send-to-back' | 'bring-forward' | 'send-backward') => {
-    window.dispatchEvent(new CustomEvent('arrange-object', { detail: { action } }));
-  };
-
-  const handleAlign = (alignment: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom' | 'center-page') => {
-    window.dispatchEvent(new CustomEvent('align-object', { detail: { alignment } }));
-  };
-
   const handleOpacityChange = (val: number) => {
     setOpacity(val);
     window.dispatchEvent(new CustomEvent('format-shape', { detail: { opacity: val } }));
-  };
-
-  const handleDuplicate = () => {
-    window.dispatchEvent(new CustomEvent('duplicate-object'));
-  };
-
-  const handleDelete = () => {
-    window.dispatchEvent(new CustomEvent('delete-object'));
   };
 
   const fonts = [
@@ -108,180 +78,21 @@ export const TextPropertiesPanel: React.FC = () => {
         <h3 className="font-semibold text-xs tracking-wider uppercase opacity-80">Text Properties</h3>
       </div>
 
-      {/* Layer Order Section */}
+      {/* Text Opacity Slider */}
       <div className="mb-4 pb-3 border-b border-gray-200/20">
-        <div className="flex items-center gap-1.5 mb-2">
-          <Layers size={14} className="text-indigo-400" />
-          <span className="text-xs font-medium">Layer Order</span>
+        <div className="flex justify-between items-center mb-1.5">
+          <span className="text-[11px] font-medium uppercase tracking-wider opacity-70">Text Opacity</span>
+          <span className="text-[11px] font-mono opacity-60 font-bold">{Math.round((opacity ?? 1) * 100)}%</span>
         </div>
-        <div className="grid grid-cols-2 gap-1.5 mb-2">
-          <button
-            type="button"
-            onClick={() => handleArrange('bring-to-front')}
-            className={`p-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
-              isDarkMode ? 'bg-gray-800 hover:bg-gray-750 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
-            }`}
-            title="Bring to Front (Ctrl+Shift+])"
-          >
-            <BringToFront size={14} className="text-indigo-400" />
-            <span>To Front</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => handleArrange('bring-forward')}
-            className={`p-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
-              isDarkMode ? 'bg-gray-800 hover:bg-gray-750 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
-            }`}
-            title="Bring Forward (Alt+])"
-          >
-            <ChevronUp size={14} className="text-indigo-400" />
-            <span>Forward</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => handleArrange('send-backward')}
-            className={`p-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
-              isDarkMode ? 'bg-gray-800 hover:bg-gray-750 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
-            }`}
-            title="Send Backward (Alt+[)"
-          >
-            <ChevronDown size={14} className="text-indigo-400" />
-            <span>Backward</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => handleArrange('send-to-back')}
-            className={`p-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
-              isDarkMode ? 'bg-gray-800 hover:bg-gray-750 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
-            }`}
-            title="Send to Back (Ctrl+Shift+[)"
-          >
-            <SendToBack size={14} className="text-indigo-400" />
-            <span>To Back</span>
-          </button>
-        </div>
-
-        <div className="grid grid-cols-2 gap-1.5">
-          <button
-            type="button"
-            onClick={handleDuplicate}
-            className={`p-1.5 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
-              isDarkMode ? 'bg-gray-800 hover:bg-gray-750 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
-            }`}
-            title="Duplicate (Ctrl+D)"
-          >
-            <Copy size={13} className="text-indigo-400" />
-            <span>Duplicate</span>
-          </button>
-          <button
-            type="button"
-            onClick={handleDelete}
-            className="p-1.5 rounded-lg border border-red-500/30 text-xs font-medium flex items-center justify-center gap-1.5 text-red-400 hover:bg-red-500/15 transition-all"
-            title="Delete (Del)"
-          >
-            <Trash2 size={13} />
-            <span>Delete</span>
-          </button>
-        </div>
-
-        {/* Alignment Controls */}
-        <div className="mt-3 pt-3 border-t border-gray-200/20">
-          <span className="text-[11px] font-medium opacity-70 block mb-1.5">Page Alignment</span>
-          <div className="grid grid-cols-4 gap-1 mb-1.5">
-            <button
-              type="button"
-              onClick={() => handleAlign('left')}
-              className={`p-1.5 rounded-lg border text-xs flex items-center justify-center transition-all ${
-                isDarkMode ? 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
-              }`}
-              title="Align Left"
-            >
-              <AlignLeft size={14} />
-            </button>
-            <button
-              type="button"
-              onClick={() => handleAlign('center')}
-              className={`p-1.5 rounded-lg border text-xs flex items-center justify-center transition-all ${
-                isDarkMode ? 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
-              }`}
-              title="Align Horizontal Center"
-            >
-              <AlignCenter size={14} />
-            </button>
-            <button
-              type="button"
-              onClick={() => handleAlign('right')}
-              className={`p-1.5 rounded-lg border text-xs flex items-center justify-center transition-all ${
-                isDarkMode ? 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
-              }`}
-              title="Align Right"
-            >
-              <AlignRight size={14} />
-            </button>
-            <button
-              type="button"
-              onClick={() => handleAlign('center-page')}
-              className={`p-1.5 rounded-lg border text-xs flex items-center justify-center text-indigo-400 transition-all ${
-                isDarkMode ? 'bg-gray-800 hover:bg-gray-700 border-gray-700' : 'bg-gray-50 hover:bg-gray-100 border-gray-200'
-              }`}
-              title="Center on Page"
-            >
-              <Maximize2 size={13} />
-            </button>
-          </div>
-          <div className="grid grid-cols-3 gap-1">
-            <button
-              type="button"
-              onClick={() => handleAlign('top')}
-              className={`p-1.5 rounded-lg border text-xs flex items-center justify-center gap-1 transition-all ${
-                isDarkMode ? 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
-              }`}
-              title="Align Top"
-            >
-              <AlignStartVertical size={13} />
-              <span className="text-[10px]">Top</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleAlign('middle')}
-              className={`p-1.5 rounded-lg border text-xs flex items-center justify-center gap-1 transition-all ${
-                isDarkMode ? 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
-              }`}
-              title="Align Middle"
-            >
-              <AlignCenterVertical size={13} />
-              <span className="text-[10px]">Middle</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleAlign('bottom')}
-              className={`p-1.5 rounded-lg border text-xs flex items-center justify-center gap-1 transition-all ${
-                isDarkMode ? 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
-              }`}
-              title="Align Bottom"
-            >
-              <AlignEndVertical size={13} />
-              <span className="text-[10px]">Bottom</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Text Opacity Slider */}
-        <div className="mt-3 pt-3 border-t border-gray-200/20">
-          <div className="flex justify-between items-center mb-1.5">
-            <span className="text-[11px] font-medium opacity-70">Text Opacity</span>
-            <span className="text-[11px] font-mono opacity-60">{Math.round((opacity ?? 1) * 100)}%</span>
-          </div>
-          <input 
-            type="range" 
-            min="0.05" 
-            max="1" 
-            step="0.05"
-            value={opacity ?? 1}
-            onChange={(e) => handleOpacityChange(parseFloat(e.target.value))}
-            className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
-          />
-        </div>
+        <input 
+          type="range" 
+          min="0.05" 
+          max="1" 
+          step="0.05"
+          value={opacity ?? 1}
+          onChange={(e) => handleOpacityChange(parseFloat(e.target.value))}
+          className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+        />
       </div>
 
       {/* Font Family */}
