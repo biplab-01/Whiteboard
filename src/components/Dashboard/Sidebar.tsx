@@ -1,4 +1,4 @@
-import { Book, Folder as FolderIcon, Inbox, Plus } from 'lucide-react';
+import { Book, Folder as FolderIcon, Inbox, Plus, Trash2, AlertCircle } from 'lucide-react';
 import { useBoardStore } from '../../store/useBoardStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useState } from 'react';
@@ -9,10 +9,11 @@ interface SidebarProps {
 }
 
 export const Sidebar = ({ currentView, setCurrentView }: SidebarProps) => {
-  const { folders, notebooks, createFolder, isDarkMode } = useBoardStore();
+  const { folders, notebooks, createFolder, deleteFolder, isDarkMode } = useBoardStore();
   const { user } = useAuthStore();
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
+  const [folderToDelete, setFolderToDelete] = useState<{ id: string; name: string } | null>(null);
 
   const unfiledCount = notebooks.filter(n => !n.folder_id).length;
 
@@ -26,7 +27,17 @@ export const Sidebar = ({ currentView, setCurrentView }: SidebarProps) => {
     }
   };
 
-  const navItemClass = (id: string) => `flex items-center justify-between w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+  const confirmDeleteFolder = async () => {
+    if (!folderToDelete) return;
+    const id = folderToDelete.id;
+    if (currentView === id) {
+      setCurrentView('all');
+    }
+    await deleteFolder(id);
+    setFolderToDelete(null);
+  };
+
+  const navItemClass = (id: string) => `group flex items-center justify-between w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
     currentView === id 
       ? (isDarkMode ? 'bg-indigo-600/20 text-indigo-400' : 'bg-indigo-50 text-indigo-700') 
       : (isDarkMode ? 'text-gray-400 hover:bg-white/5 hover:text-gray-200' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900')
@@ -62,10 +73,36 @@ export const Sidebar = ({ currentView, setCurrentView }: SidebarProps) => {
           {folders.map(folder => {
             const count = notebooks.filter(n => n.folder_id === folder.id).length;
             return (
-              <button key={folder.id} onClick={() => setCurrentView(folder.id)} className={navItemClass(folder.id)}>
-                <span className="flex items-center gap-2"><FolderIcon size={16} /> {folder.name}</span>
-                <span className="text-xs opacity-60">{count}</span>
-              </button>
+              <div 
+                key={folder.id} 
+                className={`group flex items-center justify-between w-full rounded-lg text-sm font-medium transition-colors ${
+                  currentView === folder.id 
+                    ? (isDarkMode ? 'bg-indigo-600/20 text-indigo-400' : 'bg-indigo-50 text-indigo-700') 
+                    : (isDarkMode ? 'text-gray-400 hover:bg-white/5 hover:text-gray-200' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900')
+                }`}
+              >
+                <button 
+                  onClick={() => setCurrentView(folder.id)} 
+                  className="flex items-center gap-2 flex-1 text-left px-3 py-2 min-w-0"
+                >
+                  <FolderIcon size={16} className="shrink-0" />
+                  <span className="truncate">{folder.name}</span>
+                </button>
+                <div className="flex items-center gap-1 pr-2">
+                  <span className="text-xs opacity-60 group-hover:hidden">{count}</span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setFolderToDelete({ id: folder.id, name: folder.name });
+                    }}
+                    className="hidden group-hover:flex items-center justify-center p-1 rounded hover:bg-red-500/20 text-gray-400 hover:text-red-400 transition-colors"
+                    title={`Delete "${folder.name}" folder`}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
             );
           })}
         </nav>
@@ -86,6 +123,52 @@ export const Sidebar = ({ currentView, setCurrentView }: SidebarProps) => {
           </form>
         )}
       </div>
+
+      {/* Delete Folder Confirmation Dialog */}
+      {folderToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full max-w-sm p-5 rounded-2xl shadow-2xl border animate-in fade-in zoom-in-95 duration-150 ${
+              isDarkMode ? 'bg-[#1a1c29] border-gray-700 text-white' : 'bg-white border-gray-200 text-gray-900'
+            }`}
+          >
+            <div className="flex items-center gap-3 mb-3">
+              <div className="p-2 rounded-xl bg-red-500/10 text-red-500">
+                <AlertCircle size={22} />
+              </div>
+              <div>
+                <h3 className="font-semibold text-sm">Delete Folder?</h3>
+                <p className="text-xs text-gray-400">"{folderToDelete.name}"</p>
+              </div>
+            </div>
+            
+            <p className="text-xs text-gray-400 mb-5 leading-relaxed">
+              Notebooks inside this folder will be safely moved to <span className="font-medium text-indigo-400">Unfiled</span>.
+            </p>
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setFolderToDelete(null)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  isDarkMode ? 'bg-gray-800 hover:bg-gray-700 text-gray-300' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                }`}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteFolder}
+                className="px-3.5 py-1.5 rounded-lg text-xs font-medium bg-red-600 hover:bg-red-500 text-white transition-colors flex items-center gap-1.5 shadow-sm"
+              >
+                <Trash2 size={13} />
+                <span>Delete Folder</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   );
 };

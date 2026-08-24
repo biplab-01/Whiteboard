@@ -1,9 +1,10 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import * as fabric from 'fabric';
 import { useBoardStore, getPageDimensions } from '../store/useBoardStore';
 import * as pdfjsLib from 'pdfjs-dist';
 // For Vite we can import the worker as a URL
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
+import { BringToFront, SendToBack, ChevronUp, ChevronDown, Copy, Trash2 } from 'lucide-react';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -327,6 +328,7 @@ export const Board: React.FC = () => {
   const clipboardRef = useRef<fabric.FabricObject | null>(null);
   const historyMapRef = useRef<Map<string, { undoStack: string[]; redoStack: string[] }>>(new Map());
   const isHistoryOperationRef = useRef<boolean>(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   
   const { 
     currentPageId, 
@@ -895,18 +897,151 @@ export const Board: React.FC = () => {
       }
     };
 
+    const arrangeObjectHandler = (e: Event) => {
+      const customEvent = e as CustomEvent<{ action: 'bring-to-front' | 'send-to-back' | 'bring-forward' | 'send-backward' }>;
+      if (customEvent.detail?.action) {
+        arrangeActiveObject(customEvent.detail.action);
+      }
+    };
+
+    const duplicateObjectHandler = () => {
+      duplicateActiveObject();
+    };
+
+    const deleteObjectHandler = () => {
+      deleteActiveObjects();
+    };
+
     window.addEventListener('format-text', formatTextHandler);
     window.addEventListener('format-shape', formatShapeHandler);
+    window.addEventListener('arrange-object', arrangeObjectHandler);
+    window.addEventListener('duplicate-object', duplicateObjectHandler);
+    window.addEventListener('delete-object', deleteObjectHandler);
 
     return () => {
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('format-text', formatTextHandler);
       window.removeEventListener('format-shape', formatShapeHandler);
+      window.removeEventListener('arrange-object', arrangeObjectHandler);
+      window.removeEventListener('duplicate-object', duplicateObjectHandler);
+      window.removeEventListener('delete-object', deleteObjectHandler);
       window.removeEventListener('zoom-action', zoomActionHandler);
       canvas.dispose();
       fabricRef.current = null;
     };
   }, []); // Only run once to initialize
+
+  // Delete active objects
+  const deleteActiveObjects = useCallback(() => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+    const activeObj = canvas.getActiveObject();
+    if (!activeObj) return;
+
+    if ((activeObj as any).isEditing) {
+      return;
+    }
+
+    const activeObjects = canvas.getActiveObjects();
+    if (activeObjects && activeObjects.length > 0) {
+      const toDelete = activeObjects.filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
+      if (toDelete.length > 0) {
+        canvas.discardActiveObject();
+        canvas.remove(...toDelete);
+        canvas.requestRenderAll();
+        recordState();
+      }
+    }
+  }, [recordState]);
+
+  // Arrange object layer order (Bring to Front, Send to Back, Bring Forward, Send Backward)
+  const arrangeActiveObject = useCallback((action: 'bring-to-front' | 'send-to-back' | 'bring-forward' | 'send-backward') => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+    const activeObj = canvas.getActiveObject();
+    if (!activeObj || (activeObj as any).name === 'a4-background' || (activeObj as any).name === 'a4-ruled-line') {
+      return;
+    }
+
+    // Background objects count (which must remain at the very bottom)
+    const bgObjs = canvas.getObjects().filter((o: any) => o.name === 'a4-background' || o.name === 'a4-ruled-line');
+    const bgCount = bgObjs.length;
+
+    if (activeObj.type === 'activeselection') {
+      const sel = activeObj as fabric.ActiveSelection;
+      const objects = sel.getObjects();
+      if (action === 'bring-to-front') {
+        objects.forEach(obj => canvas.bringObjectToFront(obj));
+      } else if (action === 'send-to-back') {
+        objects.forEach((obj, idx) => {
+          canvas.moveObjectTo(obj, bgCount + idx);
+        });
+      } else if (action === 'bring-forward') {
+        objects.forEach(obj => canvas.bringObjectForward(obj));
+      } else if (action === 'send-backward') {
+        objects.forEach(obj => {
+          const curIdx = canvas.getObjects().indexOf(obj);
+          if (curIdx > bgCount) {
+            canvas.sendObjectBackwards(obj);
+          }
+        });
+      }
+    } else {
+      if (action === 'bring-to-front') {
+        canvas.bringObjectToFront(activeObj);
+      } else if (action === 'send-to-back') {
+        canvas.moveObjectTo(activeObj, bgCount);
+      } else if (action === 'bring-forward') {
+        canvas.bringObjectForward(activeObj);
+      } else if (action === 'send-backward') {
+        const curIdx = canvas.getObjects().indexOf(activeObj);
+        if (curIdx > bgCount) {
+          canvas.sendObjectBackwards(activeObj);
+        }
+      }
+    }
+
+    // Ensure background objects remain at the absolute bottom
+    const bgRect = bgObjs.find((o: any) => o.name === 'a4-background');
+    const ruledLines = bgObjs.filter((o: any) => o.name === 'a4-ruled-line');
+    if (bgRect) canvas.sendObjectToBack(bgRect);
+    ruledLines.forEach(line => canvas.sendObjectToBack(line));
+    if (bgRect) canvas.sendObjectToBack(bgRect);
+
+    canvas.requestRenderAll();
+    recordState();
+  }, [recordState]);
+
+  // Duplicate active object
+  const duplicateActiveObject = useCallback(async () => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+    const active = canvas.getActiveObject();
+    if (!active || (active as any).name === 'a4-background' || (active as any).name === 'a4-ruled-line') return;
+
+    const cloned = await active.clone();
+    canvas.discardActiveObject();
+    cloned.set({
+      left: (cloned.left || 0) + 24,
+      top: (cloned.top || 0) + 24,
+      evented: true,
+    });
+
+    if (cloned.type === 'activeselection') {
+      const activeSelection = cloned as fabric.ActiveSelection;
+      activeSelection.canvas = canvas;
+      activeSelection.forEachObject((obj) => {
+        canvas.add(obj);
+      });
+      activeSelection.setCoords();
+    } else {
+      canvas.add(cloned);
+    }
+
+    canvas.setActiveObject(cloned);
+    canvas.requestRenderAll();
+    recordState();
+  }, [recordState]);
 
   // Undo & Redo custom event listeners
   useEffect(() => {
@@ -952,7 +1087,7 @@ export const Board: React.FC = () => {
     return () => window.removeEventListener('clear-canvas', handleClearCanvas);
   }, [renderBackground, recordState]);
 
-  // Copy, Cut, Paste, Duplicate, Delete, Undo & Redo keyboard shortcuts
+  // Copy, Cut, Paste, Duplicate, Delete, Layer Ordering, Undo & Redo keyboard shortcuts
   useEffect(() => {
     const handleCopy = async () => {
       const canvas = fabricRef.current;
@@ -1020,29 +1155,6 @@ export const Board: React.FC = () => {
       recordState();
     };
 
-    const handleDelete = () => {
-      const canvas = fabricRef.current;
-      if (!canvas) return;
-      const activeObj = canvas.getActiveObject();
-      if (!activeObj) return;
-
-      // If text editing is active, allow normal inline backspace
-      if ((activeObj as any).isEditing) {
-        return;
-      }
-
-      const activeObjects = canvas.getActiveObjects();
-      if (activeObjects && activeObjects.length > 0) {
-        const toDelete = activeObjects.filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
-        if (toDelete.length > 0) {
-          canvas.discardActiveObject();
-          canvas.remove(...toDelete);
-          canvas.requestRenderAll();
-          recordState();
-        }
-      }
-    };
-
     const handleKeyDown = async (e: KeyboardEvent) => {
       // Ignore if typing inside standard HTML inputs / textareas
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || (e.target as HTMLElement).isContentEditable) {
@@ -1055,7 +1167,6 @@ export const Board: React.FC = () => {
       if (isCtrlOrMeta) {
         if (key === 'z') {
           const active = fabricRef.current?.getActiveObject();
-          // If actively typing text inside Textbox, do not trigger canvas undo
           if (active && (active as any).isEditing) return;
           
           e.preventDefault();
@@ -1086,9 +1197,42 @@ export const Board: React.FC = () => {
           e.preventDefault();
           await handleCut();
         } else if (key === 'd') {
+          const active = fabricRef.current?.getActiveObject();
+          if (active && (active as any).isEditing) return;
           e.preventDefault();
-          await handleCopy();
-          await handlePaste();
+          await duplicateActiveObject();
+        } else if (e.shiftKey && (e.key === ']' || e.key === '}')) {
+          const active = fabricRef.current?.getActiveObject();
+          if (active && (active as any).isEditing) return;
+          e.preventDefault();
+          arrangeActiveObject('bring-to-front');
+        } else if (e.shiftKey && (e.key === '[' || e.key === '{')) {
+          const active = fabricRef.current?.getActiveObject();
+          if (active && (active as any).isEditing) return;
+          e.preventDefault();
+          arrangeActiveObject('send-to-back');
+        } else if (e.key === ']' || e.key === '}') {
+          const active = fabricRef.current?.getActiveObject();
+          if (active && (active as any).isEditing) return;
+          e.preventDefault();
+          arrangeActiveObject('bring-forward');
+        } else if (e.key === '[' || e.key === '{') {
+          const active = fabricRef.current?.getActiveObject();
+          if (active && (active as any).isEditing) return;
+          e.preventDefault();
+          arrangeActiveObject('send-backward');
+        }
+      } else if (e.altKey) {
+        if (e.key === ']' || e.key === '}') {
+          const active = fabricRef.current?.getActiveObject();
+          if (active && (active as any).isEditing) return;
+          e.preventDefault();
+          arrangeActiveObject('bring-forward');
+        } else if (e.key === '[' || e.key === '{') {
+          const active = fabricRef.current?.getActiveObject();
+          if (active && (active as any).isEditing) return;
+          e.preventDefault();
+          arrangeActiveObject('send-backward');
         }
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         const active = fabricRef.current?.getActiveObject();
@@ -1097,14 +1241,14 @@ export const Board: React.FC = () => {
         
         if (active) {
           e.preventDefault();
-          handleDelete();
+          deleteActiveObjects();
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleUndo, handleRedo, recordState]);
+  }, [handleUndo, handleRedo, recordState, arrangeActiveObject, duplicateActiveObject, deleteActiveObjects]);
 
   useEffect(() => {
     const handleInsertMedia = async (e: Event) => {
@@ -1113,7 +1257,7 @@ export const Board: React.FC = () => {
       const canvas = fabricRef.current;
       if (!canvas) return;
 
-      const { width: currentW, height: currentH } = getPageDimensions(pageSize, pageOrientation);
+      const { width: currentW } = getPageDimensions(pageSize, pageOrientation);
 
       if (type === 'image') {
         const img = await fabric.FabricImage.fromURL(url);
@@ -1124,6 +1268,8 @@ export const Board: React.FC = () => {
         img.set({
           left: (canvas.width! - img.getScaledWidth()) / 2,
           top: (canvas.height! - img.getScaledHeight()) / 2,
+          selectable: true,
+          evented: true,
         });
         canvas.add(img);
         canvas.setActiveObject(img);
@@ -1133,13 +1279,24 @@ export const Board: React.FC = () => {
         try {
           const loadingTask = pdfjsLib.getDocument({ url });
           const pdf = await loadingTask.promise;
-          
-          let currentY = (canvas.height! - currentH) / 2;
-          const x = (canvas.width! - currentW) / 2;
+          const { width: pageW, height: pageH } = getPageDimensions(pageSize, pageOrientation);
+          const userId = localStorage.getItem('nova_guest_id') || 'guest';
+          const currentPid = useBoardStore.getState().currentPageId;
+
+          // First, save current page state so nothing on current page is lost
+          saveState();
+
+          const pdfPagesData: { canvasData: string; name: string }[] = [];
 
           for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
             const page = await pdf.getPage(pageNum);
-            const viewport = page.getViewport({ scale: 1.5 });
+            const unscaledViewport = page.getViewport({ scale: 1 });
+            
+            // Calculate best fit scale for the document page
+            const scaleX = (pageW - 40) / unscaledViewport.width;
+            const scaleY = (pageH - 40) / unscaledViewport.height;
+            const fitScale = Math.min(scaleX, scaleY, 2.5);
+            const viewport = page.getViewport({ scale: Math.max(fitScale, 1.5) });
             
             const offscreenCanvas = document.createElement('canvas');
             const context = offscreenCanvas.getContext('2d');
@@ -1156,19 +1313,38 @@ export const Board: React.FC = () => {
             const dataUrl = offscreenCanvas.toDataURL('image/png');
             const img = await fabric.FabricImage.fromURL(dataUrl);
             
-            // Scale to fit page width
-            img.scaleToWidth(currentW - 40);
+            // Scale to fit nicely on the document page
+            const targetWidth = Math.min(pageW - 40, (img.width || pageW));
+            img.scaleToWidth(targetWidth);
             
+            const pageCenterX = (canvas.width! - pageW) / 2;
+            const pageCenterY = Math.max(50, (canvas.height! - pageH) / 2);
+            
+            const imgLeft = pageCenterX + (pageW - img.getScaledWidth()) / 2;
+            const imgTop = pageCenterY + (pageH - img.getScaledHeight()) / 2;
+
             img.set({
-              left: x + 20,
-              top: currentY + 20,
+              left: imgLeft,
+              top: imgTop,
+              selectable: true,
+              evented: true,
             });
 
-            canvas.add(img);
-            currentY += img.getScaledHeight() + 20;
+            // Construct JSON data for this new page
+            const pageJson = JSON.stringify({
+              version: '6.6.0',
+              objects: [(img as any).toObject(['name', 'excludeFromExport'])],
+            });
+
+            pdfPagesData.push({
+              canvasData: pageJson,
+              name: `Page ${pageNum}`,
+            });
           }
-          canvas.requestRenderAll();
-          recordState();
+
+          if (pdfPagesData.length > 0) {
+            await useBoardStore.getState().importPdfPages(pdfPagesData, currentPid, userId);
+          }
         } catch (error) {
           console.error("Error loading PDF:", error);
         }
@@ -1177,7 +1353,7 @@ export const Board: React.FC = () => {
 
     window.addEventListener('insert-media', handleInsertMedia);
     return () => window.removeEventListener('insert-media', handleInsertMedia);
-  }, [pageSize, pageOrientation, recordState]);
+  }, [pageSize, pageOrientation, recordState, saveState]);
 
   useEffect(() => {
     const handleSaveRequest = () => {
@@ -1775,11 +1951,169 @@ export const Board: React.FC = () => {
       recordState();
     });
 
-  }, [currentTool, strokeColor, strokeWidth, fillColor, opacity, setCurrentTool, isDarkMode, recordState, eraserMode, eraserSize, bgColor, bgType]);
+  }, [currentTool, strokeColor, strokeWidth, fillColor, opacity, setCurrentTool, isDarkMode, recordState, eraserMode, eraserSize, bgColor, bgType, setActiveTextFormat]);
+
+  // Dismiss context menu on click or escape
+  useEffect(() => {
+    const handleGlobalClick = () => {
+      setContextMenu(null);
+    };
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setContextMenu(null);
+      }
+    };
+    window.addEventListener('click', handleGlobalClick);
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => {
+      window.removeEventListener('click', handleGlobalClick);
+      window.removeEventListener('keydown', handleGlobalKeyDown);
+    };
+  }, []);
+
+  const handleCanvasContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+
+    const target = (canvas as any).findTarget(e.nativeEvent);
+    if (target && target.name !== 'a4-background' && target.name !== 'a4-ruled-line') {
+      canvas.setActiveObject(target);
+      canvas.requestRenderAll();
+      setContextMenu({ x: e.clientX, y: e.clientY });
+    } else {
+      const active = canvas.getActiveObject();
+      if (active && (active as any).name !== 'a4-background' && (active as any).name !== 'a4-ruled-line') {
+        setContextMenu({ x: e.clientX, y: e.clientY });
+      } else {
+        setContextMenu(null);
+      }
+    }
+  };
 
   return (
-    <div className={`w-full h-screen overflow-hidden ${isDarkMode ? 'bg-[#121212]' : 'bg-gray-100'}`}>
+    <div 
+      className={`w-full h-screen overflow-hidden ${isDarkMode ? 'bg-[#121212]' : 'bg-gray-100'}`}
+      onContextMenu={handleCanvasContextMenu}
+    >
       <canvas ref={canvasRef} id="board-canvas" />
+
+      {/* Right-click Context Menu */}
+      {contextMenu && (
+        <div 
+          className={`fixed z-50 py-1.5 px-1 rounded-xl shadow-2xl border backdrop-blur-xl animate-in fade-in zoom-in-95 duration-100 min-w-[195px] ${
+            isDarkMode ? 'bg-[#1a1c29]/95 border-gray-700 text-gray-200' : 'bg-white/95 border-gray-200 text-gray-800 shadow-xl shadow-black/10'
+          }`}
+          style={{ 
+            left: Math.min(contextMenu.x, window.innerWidth - 215), 
+            top: Math.min(contextMenu.y, window.innerHeight - 265) 
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              arrangeActiveObject('bring-to-front');
+              setContextMenu(null);
+            }}
+            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              isDarkMode ? 'hover:bg-white/10 hover:text-white' : 'hover:bg-gray-100 hover:text-gray-900'
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <BringToFront size={14} className="text-indigo-400" /> Bring to Front
+            </span>
+            <span className="text-[10px] opacity-50 font-mono">Ctrl+]</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              arrangeActiveObject('bring-forward');
+              setContextMenu(null);
+            }}
+            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              isDarkMode ? 'hover:bg-white/10 hover:text-white' : 'hover:bg-gray-100 hover:text-gray-900'
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <ChevronUp size={14} className="text-indigo-400" /> Bring Forward
+            </span>
+            <span className="text-[10px] opacity-50 font-mono">Alt+]</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              arrangeActiveObject('send-backward');
+              setContextMenu(null);
+            }}
+            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              isDarkMode ? 'hover:bg-white/10 hover:text-white' : 'hover:bg-gray-100 hover:text-gray-900'
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <ChevronDown size={14} className="text-indigo-400" /> Send Backward
+            </span>
+            <span className="text-[10px] opacity-50 font-mono">Alt+[</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              arrangeActiveObject('send-to-back');
+              setContextMenu(null);
+            }}
+            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              isDarkMode ? 'hover:bg-white/10 hover:text-white' : 'hover:bg-gray-100 hover:text-gray-900'
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <SendToBack size={14} className="text-indigo-400" /> Send to Back
+            </span>
+            <span className="text-[10px] opacity-50 font-mono">Ctrl+[</span>
+          </button>
+
+          <div className={`my-1 border-t ${isDarkMode ? 'border-gray-700/60' : 'border-gray-200'}`} />
+
+          <button
+            type="button"
+            onClick={() => {
+              duplicateActiveObject();
+              setContextMenu(null);
+            }}
+            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              isDarkMode ? 'hover:bg-white/10 hover:text-white' : 'hover:bg-gray-100 hover:text-gray-900'
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <Copy size={14} className="text-indigo-400" /> Duplicate
+            </span>
+            <span className="text-[10px] opacity-50 font-mono">Ctrl+D</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              const canvas = fabricRef.current;
+              if (canvas) {
+                const activeObjects = canvas.getActiveObjects();
+                const toDelete = activeObjects.filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
+                if (toDelete.length > 0) {
+                  canvas.discardActiveObject();
+                  canvas.remove(...toDelete);
+                  canvas.requestRenderAll();
+                  recordState();
+                }
+              }
+              setContextMenu(null);
+            }}
+            className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium text-red-400 hover:bg-red-500/15 transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <Trash2 size={14} /> Delete
+            </span>
+            <span className="text-[10px] opacity-50 font-mono">Del</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 };

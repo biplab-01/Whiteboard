@@ -67,6 +67,7 @@ export interface BoardState {
   // Library Actions
   fetchLibrary: (userId: string) => Promise<void>;
   createFolder: (name: string, userId: string) => Promise<void>;
+  deleteFolder: (id: string) => Promise<void>;
   createNotebook: (name: string, folderId: string | null, userId: string) => Promise<string>;
   renameNotebook: (id: string, name: string) => Promise<void>;
   deleteNotebook: (id: string) => Promise<void>;
@@ -81,6 +82,7 @@ export interface BoardState {
   removePage: (id: string) => Promise<void>;
   switchPage: (id: string, currentCanvasData?: string) => Promise<void>;
   updatePageData: (id: string, canvasData: string) => Promise<void>;
+  importPdfPages: (pdfPages: { canvasData: string; name: string }[], afterPageId: string | null, userId: string) => Promise<void>;
 
   // Background & Page Size Settings
   bgType: PageBackgroundType;
@@ -251,6 +253,22 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       }
     } catch (err) {
       console.warn('Supabase createFolder offline, kept local:', err);
+    }
+  },
+
+  deleteFolder: async (folderId) => {
+    const updatedFolders = get().folders.filter(f => f.id !== folderId);
+    const updatedNotebooks = get().notebooks.map(n => n.folder_id === folderId ? { ...n, folder_id: null } : n);
+
+    set({ folders: updatedFolders, notebooks: updatedNotebooks });
+    setLocalData(STORAGE_KEYS.FOLDERS, updatedFolders);
+    setLocalData(STORAGE_KEYS.NOTEBOOKS, updatedNotebooks);
+
+    try {
+      await supabase.from('notebooks').update({ folder_id: null }).eq('folder_id', folderId);
+      await supabase.from('folders').delete().eq('id', folderId);
+    } catch (err) {
+      console.warn('Supabase deleteFolder offline:', err);
     }
   },
 
@@ -494,6 +512,80 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       await supabase.from('pages').update({ canvas_data: canvasData as any, updated_at: new Date().toISOString() }).eq('id', id);
     } catch (err) {
       // offline save succeeded
+    }
+  },
+
+  importPdfPages: async (pdfPages, afterPageId, userId) => {
+    const { activeNotebookId, pages, bgType, bgColor, isRuled, ruleColor, pageSize, pageOrientation } = get();
+    if (!activeNotebookId || pdfPages.length === 0) return;
+
+    const currentIndex = pages.findIndex(p => p.id === afterPageId);
+    const insertIndex = currentIndex >= 0 ? currentIndex + 1 : pages.length;
+
+    const now = new Date().toISOString();
+    const newCreatedPages: PageRow[] = pdfPages.map((item, idx) => ({
+      id: `page_${Math.random().toString(36).substring(2, 9)}_${Date.now()}_${idx}`,
+      notebook_id: activeNotebookId,
+      user_id: userId,
+      name: item.name || `Page ${pages.length + idx + 1}`,
+      order_index: insertIndex + idx,
+      canvas_data: item.canvasData as any,
+      created_at: now,
+      updated_at: now,
+    }));
+
+    // Re-index all pages in order
+    const combined = [
+      ...pages.slice(0, insertIndex),
+      ...newCreatedPages,
+      ...pages.slice(insertIndex),
+    ].map((p, idx) => ({
+      ...p,
+      order_index: idx,
+      name: p.name.startsWith('Page ') ? `Page ${idx + 1}` : p.name,
+    }));
+
+    // Save page background & size settings for all new pages
+    const pageBgMap = getLocalData<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {});
+    newCreatedPages.forEach(p => {
+      pageBgMap[p.id] = { bgType, bgColor, isRuled, ruleColor, pageSize, pageOrientation };
+    });
+    setLocalData(STORAGE_KEYS.PAGE_BG_SETTINGS, pageBgMap);
+
+    // Save active page background settings to match the first new page
+    const firstNewPageId = newCreatedPages[0].id;
+    const firstSavedBg = pageBgMap[firstNewPageId] || DEFAULT_BG_SETTINGS;
+
+    // Update store and local storage
+    set({ 
+      pages: combined, 
+      currentPageId: firstNewPageId,
+      bgType: firstSavedBg.bgType,
+      bgColor: firstSavedBg.bgColor,
+      isRuled: firstSavedBg.isRuled,
+      ruleColor: firstSavedBg.ruleColor,
+      pageSize: firstSavedBg.pageSize || 'a4',
+      pageOrientation: firstSavedBg.pageOrientation || 'portrait',
+    });
+
+    const allPages = getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []);
+    const otherNotebookPages = allPages.filter(p => p.notebook_id !== activeNotebookId);
+    setLocalData(STORAGE_KEYS.PAGES, [...otherNotebookPages, ...combined]);
+
+    // Sync to Supabase in background
+    try {
+      for (const p of newCreatedPages) {
+        await supabase.from('pages').insert({
+          id: p.id,
+          notebook_id: activeNotebookId,
+          user_id: userId,
+          name: p.name,
+          order_index: p.order_index,
+          canvas_data: p.canvas_data,
+        });
+      }
+    } catch (err) {
+      console.warn('Supabase importPdfPages offline:', err);
     }
   },
 

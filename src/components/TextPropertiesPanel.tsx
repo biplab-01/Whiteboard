@@ -6,9 +6,16 @@ import {
   Italic, 
   Underline, 
   Strikethrough, 
-  Type,
-  Palette,
-  Highlighter
+  Type, 
+  Palette, 
+  Highlighter,
+  BringToFront,
+  SendToBack,
+  ChevronUp,
+  ChevronDown,
+  Copy,
+  Trash2,
+  Layers
 } from 'lucide-react';
 import { HexColorPicker } from 'react-colorful';
 
@@ -28,6 +35,18 @@ export const TextPropertiesPanel: React.FC = () => {
 
     // 2. Dispatch custom event to let Board canvas apply changes to the Fabric text object
     window.dispatchEvent(new CustomEvent('format-text', { detail: updates }));
+  };
+
+  const handleArrange = (action: 'bring-to-front' | 'send-to-back' | 'bring-forward' | 'send-backward') => {
+    window.dispatchEvent(new CustomEvent('arrange-object', { detail: { action } }));
+  };
+
+  const handleDuplicate = () => {
+    window.dispatchEvent(new CustomEvent('duplicate-object'));
+  };
+
+  const handleDelete = () => {
+    window.dispatchEvent(new CustomEvent('delete-object'));
   };
 
   const fonts = [
@@ -71,6 +90,83 @@ export const TextPropertiesPanel: React.FC = () => {
       <div className="flex items-center gap-2 pb-3 mb-3.5 border-b border-gray-200/20">
         <Type size={18} className={isDarkMode ? 'text-indigo-400' : 'text-indigo-600'} />
         <h3 className="font-semibold text-xs tracking-wider uppercase opacity-80">Text Properties</h3>
+      </div>
+
+      {/* Layer Order Section */}
+      <div className="mb-4 pb-3 border-b border-gray-200/20">
+        <div className="flex items-center gap-1.5 mb-2">
+          <Layers size={14} className="text-indigo-400" />
+          <span className="text-xs font-medium">Layer Order</span>
+        </div>
+        <div className="grid grid-cols-2 gap-1.5 mb-2">
+          <button
+            type="button"
+            onClick={() => handleArrange('bring-to-front')}
+            className={`p-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
+              isDarkMode ? 'bg-gray-800 hover:bg-gray-750 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
+            }`}
+            title="Bring to Front (Ctrl+Shift+])"
+          >
+            <BringToFront size={14} className="text-indigo-400" />
+            <span>To Front</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleArrange('bring-forward')}
+            className={`p-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
+              isDarkMode ? 'bg-gray-800 hover:bg-gray-750 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
+            }`}
+            title="Bring Forward (Alt+])"
+          >
+            <ChevronUp size={14} className="text-indigo-400" />
+            <span>Forward</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleArrange('send-backward')}
+            className={`p-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
+              isDarkMode ? 'bg-gray-800 hover:bg-gray-750 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
+            }`}
+            title="Send Backward (Alt+[)"
+          >
+            <ChevronDown size={14} className="text-indigo-400" />
+            <span>Backward</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleArrange('send-to-back')}
+            className={`p-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
+              isDarkMode ? 'bg-gray-800 hover:bg-gray-750 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
+            }`}
+            title="Send to Back (Ctrl+Shift+[)"
+          >
+            <SendToBack size={14} className="text-indigo-400" />
+            <span>To Back</span>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-1.5">
+          <button
+            type="button"
+            onClick={handleDuplicate}
+            className={`p-1.5 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
+              isDarkMode ? 'bg-gray-800 hover:bg-gray-750 border-gray-700 text-gray-200' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
+            }`}
+            title="Duplicate (Ctrl+D)"
+          >
+            <Copy size={13} className="text-indigo-400" />
+            <span>Duplicate</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleDelete}
+            className="p-1.5 rounded-lg border border-red-500/30 text-xs font-medium flex items-center justify-center gap-1.5 text-red-400 hover:bg-red-500/15 transition-all"
+            title="Delete (Del)"
+          >
+            <Trash2 size={13} />
+            <span>Delete</span>
+          </button>
+        </div>
       </div>
 
       {/* Font Family */}
