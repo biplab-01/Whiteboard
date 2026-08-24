@@ -143,27 +143,34 @@ export const ImportDocsModal: React.FC<ImportDocsModalProps> = ({
           const targetWidth = unscaledViewport.width * fitScale;
           const targetHeight = unscaledViewport.height * fitScale;
 
-          // Render at high resolution (2.0x scale minimum or 2x fit scale) for ultra-sharp text
-          const renderScale = Math.max(2.0, fitScale * 2);
+          // Render at ultra-high resolution (4.0x DPI) for vector-crisp text sharpness
+          const renderScale = 4.0;
           const viewport = page.getViewport({ scale: renderScale });
 
           const offscreenCanvas = document.createElement('canvas');
-          const context = offscreenCanvas.getContext('2d');
           offscreenCanvas.height = viewport.height;
           offscreenCanvas.width = viewport.width;
+
+          const context = offscreenCanvas.getContext('2d', { alpha: false });
+          if (context) {
+            context.imageSmoothingEnabled = true;
+            context.imageSmoothingQuality = 'high';
+          }
 
           await page.render({
             canvasContext: context!,
             viewport,
+            intent: 'print',
           } as any).promise;
 
-          const dataUrl = offscreenCanvas.toDataURL('image/jpeg', 0.92);
+          const dataUrl = offscreenCanvas.toDataURL('image/jpeg', 0.98);
 
           const imgLeft = pageCenterX + (pageW - targetWidth) / 2;
           const imgTop = pageCenterY + (pageH - targetHeight) / 2;
 
           const imgObj = {
             type: 'image',
+            name: 'pdf-page',
             version: '6.6.0',
             originX: 'left',
             originY: 'top',
@@ -176,6 +183,12 @@ export const ImportDocsModal: React.FC<ImportDocsModalProps> = ({
             src: dataUrl,
             selectable: true,
             evented: true,
+            shadow: {
+              color: isDarkMode ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.18)',
+              blur: 24,
+              offsetX: 0,
+              offsetY: 8,
+            },
           };
 
           const pageJson = JSON.stringify({

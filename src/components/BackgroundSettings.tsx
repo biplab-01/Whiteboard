@@ -232,6 +232,21 @@ export const BackgroundSettings: React.FC = () => {
 
           {activeTab === 'solid' && (
             <div className="space-y-4">
+              <button
+                type="button"
+                onClick={() => { setBgType('none'); setBgColor('transparent'); }}
+                className={`w-full py-2 px-3 rounded-xl border text-xs font-semibold flex items-center justify-between transition-all ${
+                  bgType === 'none' || bgColor === 'transparent'
+                    ? 'border-indigo-500 bg-indigo-500/15 text-indigo-400 ring-1 ring-indigo-500/30'
+                    : isDarkMode
+                    ? 'border-gray-700 bg-gray-800/40 text-gray-400 hover:text-gray-200 hover:border-gray-600'
+                    : 'border-gray-200 bg-gray-50 text-gray-600 hover:text-gray-900 hover:border-gray-300'
+                }`}
+              >
+                <span>🚫 No Background Page (Clean Document)</span>
+                {(bgType === 'none' || bgColor === 'transparent') && <Check size={14} />}
+              </button>
+
               <div>
                 <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Preset Colors</p>
                 <div className="grid grid-cols-5 gap-2">

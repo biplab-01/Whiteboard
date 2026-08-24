@@ -378,6 +378,17 @@ export const Board: React.FC = () => {
     // For the actual canvas background (the infinite space outside page)
     canvas.backgroundColor = isDarkMode ? '#121212' : '#e5e7eb'; 
 
+    // Remove old page background if exists (identified by special name)
+    const oldBgs = canvas.getObjects().filter((o: any) => o.name === 'a4-background' || o.name === 'a4-ruled-line');
+    oldBgs.forEach(o => canvas.remove(o));
+
+    // If background is set to none, transparent, or if the page contains an imported PDF document, skip background paper rect
+    const hasPdfDoc = canvas.getObjects().some((o: any) => (o as any).name === 'pdf-page' || (o.type === 'image' && (o as any).src));
+    if (bgType === 'none' || bgColor === 'transparent' || hasPdfDoc) {
+      canvas.requestRenderAll();
+      return;
+    }
+
     // Create the Page Rect
     let pageBg: string | fabric.Gradient<any> = bgColor;
     if (bgType === 'gradient') {
@@ -412,10 +423,6 @@ export const Board: React.FC = () => {
         offsetY: 8
       })
     });
-
-    // Remove old page background if exists (identified by special name)
-    const oldBgs = canvas.getObjects().filter((o: any) => o.name === 'a4-background' || o.name === 'a4-ruled-line');
-    oldBgs.forEach(o => canvas.remove(o));
 
     pageRect.name = 'a4-background';
     canvas.add(pageRect);
@@ -1445,23 +1452,29 @@ export const Board: React.FC = () => {
             const targetWidth = unscaledViewport.width * fitScale;
             const targetHeight = unscaledViewport.height * fitScale;
 
-            // Render at high resolution (2.0x scale minimum or 2x fit scale) for ultra-sharp text
-            const renderScale = Math.max(2.0, fitScale * 2);
+            // Render at ultra-high resolution (4.0x DPI) for vector-crisp text sharpness
+            const renderScale = 4.0;
             const viewport = page.getViewport({ scale: renderScale });
             
             const offscreenCanvas = document.createElement('canvas');
-            const context = offscreenCanvas.getContext('2d');
             offscreenCanvas.height = viewport.height;
             offscreenCanvas.width = viewport.width;
 
+            const context = offscreenCanvas.getContext('2d', { alpha: false });
+            if (context) {
+              context.imageSmoothingEnabled = true;
+              context.imageSmoothingQuality = 'high';
+            }
+
             const renderContext: any = {
               canvasContext: context!,
-              viewport: viewport
+              viewport: viewport,
+              intent: 'print',
             };
 
             await page.render(renderContext).promise;
             
-            const dataUrl = offscreenCanvas.toDataURL('image/jpeg', 0.92);
+            const dataUrl = offscreenCanvas.toDataURL('image/jpeg', 0.98);
             const img = await fabric.FabricImage.fromURL(dataUrl);
             
             const pageCenterX = (canvas.width! - pageW) / 2;
@@ -1471,18 +1484,26 @@ export const Board: React.FC = () => {
             const imgTop = pageCenterY + (pageH - targetHeight) / 2;
 
             img.set({
+              name: 'pdf-page',
               left: imgLeft,
               top: imgTop,
               scaleX: targetWidth / viewport.width,
               scaleY: targetHeight / viewport.height,
               selectable: true,
               evented: true,
+              shadow: new fabric.Shadow({
+                color: isDarkMode ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.18)',
+                blur: 24,
+                offsetX: 0,
+                offsetY: 8,
+              }),
             });
 
-            const imgObj = (img as any).toObject(['name', 'excludeFromExport']);
+            const imgObj = (img as any).toObject(['name', 'excludeFromExport', 'shadow']);
             if (!imgObj.src) {
               imgObj.src = dataUrl;
             }
+            imgObj.name = 'pdf-page';
 
             // Construct JSON data for this new page
             const pageJson = JSON.stringify({

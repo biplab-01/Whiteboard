@@ -8,7 +8,7 @@ type NotebookRow = Database['public']['Tables']['notebooks']['Row'];
 type PageRow = Database['public']['Tables']['pages']['Row'];
 
 export type ToolType = 'select' | 'pan' | 'pen' | 'highlighter' | 'eraser' | 'rectangle' | 'circle' | 'triangle' | 'line' | 'arrow' | 'diamond' | 'star' | 'text';
-export type PageBackgroundType = 'solid' | 'gradient';
+export type PageBackgroundType = 'solid' | 'gradient' | 'none';
 export type PageSizeType = 'a4' | 'letter' | 'legal' | 'a3' | 'a5' | 'tabloid' | 'square';
 export type PageOrientationType = 'portrait' | 'landscape';
 
@@ -354,8 +354,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const pageBgMap = await getIdbItem<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, getLocalData<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {}));
     createdPages.forEach(p => {
       pageBgMap[p.id] = {
-        bgType: 'solid',
-        bgColor: '#ffffff',
+        bgType: 'none',
+        bgColor: 'transparent',
         isRuled: false,
         ruleColor: '#e2e8f0',
         pageSize: 'a4',
@@ -608,7 +608,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 
   importPdfPages: async (pdfPages, afterPageId, userId) => {
-    const { activeNotebookId, pages, bgType, bgColor, isRuled, ruleColor, pageSize, pageOrientation } = get();
+    const { activeNotebookId, pages, pageSize, pageOrientation } = get();
     if (!activeNotebookId || pdfPages.length === 0) return;
 
     const currentIndex = pages.findIndex(p => p.id === afterPageId);
@@ -640,7 +640,14 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     // Save page background & size settings for all new pages
     const pageBgMap = await getIdbItem<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, getLocalData<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {}));
     newCreatedPages.forEach(p => {
-      pageBgMap[p.id] = { bgType, bgColor, isRuled, ruleColor, pageSize, pageOrientation };
+      pageBgMap[p.id] = { 
+        bgType: 'none', 
+        bgColor: 'transparent', 
+        isRuled: false, 
+        ruleColor: '#e2e8f0', 
+        pageSize, 
+        pageOrientation 
+      };
     });
     setLocalData(STORAGE_KEYS.PAGE_BG_SETTINGS, pageBgMap);
 
