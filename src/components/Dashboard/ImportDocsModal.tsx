@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback } from 'react';
-import { useBoardStore } from '../../store/useBoardStore';
+import { useBoardStore, getPageDimensions } from '../../store/useBoardStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
@@ -111,8 +111,11 @@ export const ImportDocsModal: React.FC<ImportDocsModalProps> = ({
     const userId = user?.id || localStorage.getItem('nova_guest_id') || 'guest';
     const targetFolder = (selectedFolderId === 'all' || selectedFolderId === 'unfiled') ? null : selectedFolderId;
 
-    const pageW = 595;
-    const pageH = 842;
+    const { width: pageW, height: pageH } = getPageDimensions('a4', 'portrait');
+    const screenW = typeof window !== 'undefined' ? window.innerWidth : 1920;
+    const screenH = typeof window !== 'undefined' ? window.innerHeight : 960;
+    const pageCenterX = (screenW - pageW) / 2;
+    const pageCenterY = Math.max(50, (screenH - pageH) / 2);
 
     try {
       for (let i = 0; i < files.length; i++) {
@@ -131,11 +134,18 @@ export const ImportDocsModal: React.FC<ImportDocsModalProps> = ({
           const page = await pdf.getPage(pNum);
           const unscaledViewport = page.getViewport({ scale: 1 });
 
-          // Scale for crisp rendering
-          const scaleX = (pageW - 40) / unscaledViewport.width;
-          const scaleY = (pageH - 40) / unscaledViewport.height;
-          const fitScale = Math.min(scaleX, scaleY, 2.5);
-          const viewport = page.getViewport({ scale: Math.max(fitScale, 1.5) });
+          // Constrain within document page with clean 24px padding
+          const padding = 24;
+          const availW = pageW - padding * 2;
+          const availH = pageH - padding * 2;
+
+          const fitScale = Math.min(availW / unscaledViewport.width, availH / unscaledViewport.height);
+          const targetWidth = unscaledViewport.width * fitScale;
+          const targetHeight = unscaledViewport.height * fitScale;
+
+          // Render at high resolution (2.0x scale minimum or 2x fit scale) for ultra-sharp text
+          const renderScale = Math.max(2.0, fitScale * 2);
+          const viewport = page.getViewport({ scale: renderScale });
 
           const offscreenCanvas = document.createElement('canvas');
           const context = offscreenCanvas.getContext('2d');
@@ -147,15 +157,10 @@ export const ImportDocsModal: React.FC<ImportDocsModalProps> = ({
             viewport,
           } as any).promise;
 
-          const dataUrl = offscreenCanvas.toDataURL('image/jpeg', 0.90);
+          const dataUrl = offscreenCanvas.toDataURL('image/jpeg', 0.92);
 
-          // Scaled bounds for document page
-          const targetWidth = Math.min(pageW - 40, (viewport.width || pageW));
-          const scaleFactor = targetWidth / viewport.width;
-          const targetHeight = viewport.height * scaleFactor;
-
-          const imgLeft = 20 + (pageW - 40 - targetWidth) / 2;
-          const imgTop = 20 + (pageH - 40 - targetHeight) / 2;
+          const imgLeft = pageCenterX + (pageW - targetWidth) / 2;
+          const imgTop = pageCenterY + (pageH - targetHeight) / 2;
 
           const imgObj = {
             type: 'image',
@@ -166,8 +171,8 @@ export const ImportDocsModal: React.FC<ImportDocsModalProps> = ({
             top: imgTop,
             width: viewport.width,
             height: viewport.height,
-            scaleX: scaleFactor,
-            scaleY: scaleFactor,
+            scaleX: targetWidth / viewport.width,
+            scaleY: targetHeight / viewport.height,
             src: dataUrl,
             selectable: true,
             evented: true,

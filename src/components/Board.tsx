@@ -656,6 +656,26 @@ export const Board: React.FC = () => {
         ? JSON.parse(currentPage.canvas_data)
         : currentPage.canvas_data;
       canvas.loadFromJSON(parsed).then(() => {
+        const { width: pageW, height: pageH } = getPageDimensions(pageSize, pageOrientation);
+        const pageCenterX = (canvas.width! - pageW) / 2;
+        const pageCenterY = Math.max(50, (canvas.height! - pageH) / 2);
+
+        const userObjects = canvas.getObjects().filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
+        if (userObjects.length > 0) {
+          const minX = Math.min(...userObjects.map(o => o.left || 0));
+          if (minX < 150 && pageCenterX > 200) {
+            const shiftX = pageCenterX;
+            const shiftY = pageCenterY > 50 ? pageCenterY - 20 : 0;
+            userObjects.forEach(obj => {
+              obj.set({
+                left: (obj.left || 0) + shiftX,
+                top: (obj.top || 0) + shiftY,
+              });
+              obj.setCoords();
+            });
+          }
+        }
+
         renderBackground(canvas);
         canvas.requestRenderAll();
         if (currentPageId) {
@@ -1416,11 +1436,18 @@ export const Board: React.FC = () => {
             const page = await pdf.getPage(pageNum);
             const unscaledViewport = page.getViewport({ scale: 1 });
             
-            // Calculate best fit scale for the document page
-            const scaleX = (pageW - 40) / unscaledViewport.width;
-            const scaleY = (pageH - 40) / unscaledViewport.height;
-            const fitScale = Math.min(scaleX, scaleY, 2.5);
-            const viewport = page.getViewport({ scale: Math.max(fitScale, 1.5) });
+            // Calculate best fit scale for the document page with 24px padding
+            const padding = 24;
+            const availW = pageW - padding * 2;
+            const availH = pageH - padding * 2;
+
+            const fitScale = Math.min(availW / unscaledViewport.width, availH / unscaledViewport.height);
+            const targetWidth = unscaledViewport.width * fitScale;
+            const targetHeight = unscaledViewport.height * fitScale;
+
+            // Render at high resolution (2.0x scale minimum or 2x fit scale) for ultra-sharp text
+            const renderScale = Math.max(2.0, fitScale * 2);
+            const viewport = page.getViewport({ scale: renderScale });
             
             const offscreenCanvas = document.createElement('canvas');
             const context = offscreenCanvas.getContext('2d');
@@ -1434,22 +1461,20 @@ export const Board: React.FC = () => {
 
             await page.render(renderContext).promise;
             
-            const dataUrl = offscreenCanvas.toDataURL('image/jpeg', 0.90);
+            const dataUrl = offscreenCanvas.toDataURL('image/jpeg', 0.92);
             const img = await fabric.FabricImage.fromURL(dataUrl);
-            
-            // Scale to fit nicely on the document page
-            const targetWidth = Math.min(pageW - 40, (img.width || pageW));
-            img.scaleToWidth(targetWidth);
             
             const pageCenterX = (canvas.width! - pageW) / 2;
             const pageCenterY = Math.max(50, (canvas.height! - pageH) / 2);
             
-            const imgLeft = pageCenterX + (pageW - img.getScaledWidth()) / 2;
-            const imgTop = pageCenterY + (pageH - img.getScaledHeight()) / 2;
+            const imgLeft = pageCenterX + (pageW - targetWidth) / 2;
+            const imgTop = pageCenterY + (pageH - targetHeight) / 2;
 
             img.set({
               left: imgLeft,
               top: imgTop,
+              scaleX: targetWidth / viewport.width,
+              scaleY: targetHeight / viewport.height,
               selectable: true,
               evented: true,
             });
@@ -1519,6 +1544,26 @@ export const Board: React.FC = () => {
           : pageToLoad.canvas_data;
 
         canvas.loadFromJSON(parsed).then(() => {
+          const { width: pageW, height: pageH } = getPageDimensions(pageSize, pageOrientation);
+          const pageCenterX = (canvas.width! - pageW) / 2;
+          const pageCenterY = Math.max(50, (canvas.height! - pageH) / 2);
+
+          const userObjects = canvas.getObjects().filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
+          if (userObjects.length > 0) {
+            const minX = Math.min(...userObjects.map(o => o.left || 0));
+            if (minX < 150 && pageCenterX > 200) {
+              const shiftX = pageCenterX;
+              const shiftY = pageCenterY > 50 ? pageCenterY - 20 : 0;
+              userObjects.forEach(obj => {
+                obj.set({
+                  left: (obj.left || 0) + shiftX,
+                  top: (obj.top || 0) + shiftY,
+                });
+                obj.setCoords();
+              });
+            }
+          }
+
           canvas.forEachObject((obj) => {
             if (obj.type === 'textbox' || obj.type === 'i-text') {
               normalizeTextObject(obj);
