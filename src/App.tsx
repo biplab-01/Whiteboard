@@ -125,7 +125,12 @@ function App() {
 
       {/* Back to Dashboard Button */}
       <button 
-        onClick={closeNotebook}
+        onClick={() => {
+          window.dispatchEvent(new CustomEvent('save-canvas-state'));
+          setTimeout(() => {
+            closeNotebook();
+          }, 30);
+        }}
         className={`fixed top-6 left-6 px-3.5 py-2.5 rounded-xl shadow-md border backdrop-blur-md transition-all z-20 flex items-center gap-2 text-sm font-medium ${
           isDarkMode ? 'bg-gray-800/80 border-gray-700 text-gray-200 hover:bg-gray-700' : 'bg-white/80 border-gray-200 text-gray-700 hover:bg-gray-50'
         }`}

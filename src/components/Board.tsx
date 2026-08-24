@@ -1310,7 +1310,7 @@ export const Board: React.FC = () => {
 
             await page.render(renderContext).promise;
             
-            const dataUrl = offscreenCanvas.toDataURL('image/png');
+            const dataUrl = offscreenCanvas.toDataURL('image/jpeg', 0.90);
             const img = await fabric.FabricImage.fromURL(dataUrl);
             
             // Scale to fit nicely on the document page
@@ -1330,10 +1330,15 @@ export const Board: React.FC = () => {
               evented: true,
             });
 
+            const imgObj = (img as any).toObject(['name', 'excludeFromExport']);
+            if (!imgObj.src) {
+              imgObj.src = dataUrl;
+            }
+
             // Construct JSON data for this new page
             const pageJson = JSON.stringify({
               version: '6.6.0',
-              objects: [(img as any).toObject(['name', 'excludeFromExport'])],
+              objects: [imgObj],
             });
 
             pdfPagesData.push({

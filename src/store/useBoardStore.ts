@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '../lib/supabase';
 import type { Database } from '../lib/database.types';
+import { getIdbItem, setIdbItem, getCachedData, initIdbStorage } from '../lib/idbStorage';
 
 type FolderRow = Database['public']['Tables']['folders']['Row'];
 type NotebookRow = Database['public']['Tables']['notebooks']['Row'];
@@ -151,7 +152,7 @@ const DEFAULT_BG_SETTINGS: BgSettings = {
   pageOrientation: 'portrait',
 };
 
-// Local Storage helpers
+// Storage keys
 export const STORAGE_KEYS = {
   FOLDERS: 'nova_folders',
   NOTEBOOKS: 'nova_notebooks',
@@ -161,21 +162,24 @@ export const STORAGE_KEYS = {
   ACTIVE_NOTEBOOK: 'nova_active_notebook_id',
 };
 
+// Initialize background storage hydration from IndexedDB
+if (typeof window !== 'undefined') {
+  initIdbStorage([
+    STORAGE_KEYS.FOLDERS,
+    STORAGE_KEYS.NOTEBOOKS,
+    STORAGE_KEYS.PAGES,
+    STORAGE_KEYS.PAGE_BG_SETTINGS,
+    STORAGE_KEYS.BG_SETTINGS,
+    STORAGE_KEYS.ACTIVE_NOTEBOOK
+  ]);
+}
+
 export const getLocalData = <T>(key: string, defaultVal: T): T => {
-  try {
-    const item = localStorage.getItem(key);
-    return item ? JSON.parse(item) : defaultVal;
-  } catch {
-    return defaultVal;
-  }
+  return getCachedData<T>(key, defaultVal);
 };
 
 export const setLocalData = <T>(key: string, data: T) => {
-  try {
-    localStorage.setItem(key, JSON.stringify(data));
-  } catch (e) {
-    console.warn('LocalStorage save error:', e);
-  }
+  setIdbItem(key, data);
 };
 
 export const getPageBackgroundSettings = (pageId?: string | null): BgSettings => {
@@ -360,8 +364,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     set({ loading: true });
     setLocalData(STORAGE_KEYS.ACTIVE_NOTEBOOK, id);
     
-    // Look up in local pages
-    const allPages = getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []);
+    // Look up in local pages (checking IndexedDB cache)
+    const allPages = await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []));
     let notebookPages = allPages.filter(p => p.notebook_id === id).sort((a, b) => a.order_index - b.order_index);
 
     // If no pages exist yet for this notebook, create Page 1
@@ -382,7 +386,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     }
 
     const firstPageId = notebookPages[0]?.id || null;
-    const pageBgMap = getLocalData<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {});
+    const pageBgMap = await getIdbItem<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, getLocalData<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {}));
     const savedBg = (firstPageId && pageBgMap[firstPageId]) || getLocalData<BgSettings>(STORAGE_KEYS.BG_SETTINGS, DEFAULT_BG_SETTINGS);
 
     set({ 
@@ -398,22 +402,36 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       loading: false
     });
 
-    // Try Supabase in background
+    // Try Supabase in background without destroying newer local pages
     try {
       const res = await supabase.from('pages').select('*').eq('notebook_id', id).order('order_index', { ascending: true });
       if (res.data && res.data.length > 0) {
-        const supFirstPageId = res.data[0]?.id || null;
-        const supSavedBg = (supFirstPageId && pageBgMap[supFirstPageId]) || getLocalData<BgSettings>(STORAGE_KEYS.BG_SETTINGS, DEFAULT_BG_SETTINGS);
-        set({ 
-          pages: res.data,
-          currentPageId: supFirstPageId,
-          bgType: supSavedBg.bgType,
-          bgColor: supSavedBg.bgColor,
-          isRuled: supSavedBg.isRuled,
-          ruleColor: supSavedBg.ruleColor,
-          pageSize: supSavedBg.pageSize || 'a4',
-          pageOrientation: supSavedBg.pageOrientation || 'portrait',
+        const currentLocal = get().pages;
+        const mergedPagesMap = new Map<string, PageRow>();
+        
+        // Remote pages
+        res.data.forEach(p => mergedPagesMap.set(p.id, p));
+        // Keep local pages if they have canvas_data or do not exist remotely yet
+        currentLocal.forEach(p => {
+          const remote = mergedPagesMap.get(p.id);
+          if (!remote || (p.canvas_data && !remote.canvas_data)) {
+            mergedPagesMap.set(p.id, p);
+          }
         });
+        const mergedPages = Array.from(mergedPagesMap.values()).sort((a, b) => a.order_index - b.order_index);
+
+        const currentActivePageId = get().currentPageId;
+        const validActivePageId = mergedPages.some(p => p.id === currentActivePageId) ? currentActivePageId : (mergedPages[0]?.id || null);
+
+        set({ 
+          pages: mergedPages,
+          currentPageId: validActivePageId,
+        });
+
+        // Also sync merged state to IndexedDB
+        const freshAllPages = await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []));
+        const otherPages = freshAllPages.filter(p => p.notebook_id !== id);
+        setLocalData(STORAGE_KEYS.PAGES, [...otherPages, ...mergedPages]);
       }
     } catch (err) {
       console.warn('Supabase openNotebook offline:', err);
@@ -441,14 +459,14 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     };
 
     // Save page background & size settings for new page
-    const pageBgMap = getLocalData<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {});
+    const pageBgMap = await getIdbItem<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, getLocalData<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {}));
     pageBgMap[newPage.id] = { bgType, bgColor, isRuled, ruleColor, pageSize, pageOrientation };
     setLocalData(STORAGE_KEYS.PAGE_BG_SETTINGS, pageBgMap);
 
     const updatedPages = [...pages, newPage];
     set({ pages: updatedPages, currentPageId: newPage.id });
 
-    const allPages = getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []);
+    const allPages = await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []));
     setLocalData(STORAGE_KEYS.PAGES, [...allPages, newPage]);
 
     try {
@@ -472,7 +490,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     
     set({ pages: newPages, currentPageId: newCurrentPageId });
 
-    const allPages = getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []);
+    const allPages = await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []));
     setLocalData(STORAGE_KEYS.PAGES, allPages.filter(p => p.id !== id));
 
     try {
@@ -487,7 +505,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     if (currentPageId && currentCanvasData !== undefined && currentCanvasData !== '') {
       await get().updatePageData(currentPageId, currentCanvasData);
     }
-    const pageBgMap = getLocalData<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {});
+    const pageBgMap = await getIdbItem<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, getLocalData<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {}));
     const savedBg = pageBgMap[id] || getLocalData<BgSettings>(STORAGE_KEYS.BG_SETTINGS, DEFAULT_BG_SETTINGS);
     set({ 
       currentPageId: id,
@@ -501,11 +519,15 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 
   updatePageData: async (id, canvasData) => {
-    const updatedPages = get().pages.map(p => p.id === id ? { ...p, canvas_data: canvasData as any } : p);
+    const updatedPages = get().pages.map(p => p.id === id ? { ...p, canvas_data: canvasData as any, updated_at: new Date().toISOString() } : p);
     set({ pages: updatedPages });
 
-    const allPages = getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []);
+    const allPages = await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []));
     const updatedAllPages = allPages.map(p => p.id === id ? { ...p, canvas_data: canvasData as any, updated_at: new Date().toISOString() } : p);
+    if (!updatedAllPages.some(p => p.id === id)) {
+      const pToAdd = updatedPages.find(p => p.id === id);
+      if (pToAdd) updatedAllPages.push(pToAdd);
+    }
     setLocalData(STORAGE_KEYS.PAGES, updatedAllPages);
 
     try {
@@ -546,7 +568,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     }));
 
     // Save page background & size settings for all new pages
-    const pageBgMap = getLocalData<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {});
+    const pageBgMap = await getIdbItem<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, getLocalData<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {}));
     newCreatedPages.forEach(p => {
       pageBgMap[p.id] = { bgType, bgColor, isRuled, ruleColor, pageSize, pageOrientation };
     });
@@ -556,7 +578,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const firstNewPageId = newCreatedPages[0].id;
     const firstSavedBg = pageBgMap[firstNewPageId] || DEFAULT_BG_SETTINGS;
 
-    // Update store and local storage
+    // Update store state immediately
     set({ 
       pages: combined, 
       currentPageId: firstNewPageId,
@@ -568,7 +590,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       pageOrientation: firstSavedBg.pageOrientation || 'portrait',
     });
 
-    const allPages = getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []);
+    const allPages = await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []));
     const otherNotebookPages = allPages.filter(p => p.notebook_id !== activeNotebookId);
     setLocalData(STORAGE_KEYS.PAGES, [...otherNotebookPages, ...combined]);
 
