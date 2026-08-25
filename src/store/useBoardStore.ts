@@ -391,105 +391,84 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     }
 
     try {
-      // Step 2: Fetch remote folders and notebooks from Supabase
+      // Step 2: Fetch authoritative remote folders and notebooks from Supabase
       const [foldersRes, notebooksRes] = await Promise.all([
         supabase.from('folders').select('*').eq('user_id', userId).order('created_at', { ascending: true }),
         supabase.from('notebooks').select('*').eq('user_id', userId).order('created_at', { ascending: false })
       ]);
 
-      const remoteFolders = foldersRes.data || [];
-      const remoteNotebooks = notebooksRes.data || [];
-      const remoteFolderIds = new Set(remoteFolders.map(f => f.id));
+      let remoteFolders = foldersRes.data || [];
+      let remoteNotebooks = notebooksRes.data || [];
 
-      // Step 3: Push local folders that aren't in Supabase yet
-      for (const lf of localFolders) {
-        if (!remoteFolderIds.has(lf.id)) {
+      // Case A: First-time Host Onboarding (Supabase is empty, but local has host notebooks)
+      if (remoteNotebooks.length === 0 && localNotebooks.length > 0) {
+        // Upload initial host folders
+        for (const lf of localFolders) {
           const { data: newF } = await supabase.from('folders').insert({
             id: lf.id,
             name: lf.name,
             user_id: userId,
             created_at: lf.created_at || new Date().toISOString()
           }).select().single();
-          if (newF) {
-            remoteFolders.push(newF);
-            remoteFolderIds.add(newF.id);
-          }
+          if (newF) remoteFolders.push(newF);
         }
-      }
 
-      // Step 4: Push local notebooks that aren't in Supabase yet
-      const remoteNotebookIds = new Set(remoteNotebooks.map(n => n.id));
-      for (const lnb of localNotebooks) {
-        if (!remoteNotebookIds.has(lnb.id)) {
-          const validFolderId = (lnb.folder_id && remoteFolderIds.has(lnb.folder_id)) ? lnb.folder_id : null;
+        // Upload initial host notebooks
+        for (const lnb of localNotebooks) {
           const { error: nbErr } = await supabase.from('notebooks').insert({
             id: lnb.id,
             name: lnb.name,
-            folder_id: validFolderId,
+            folder_id: lnb.folder_id,
             user_id: userId,
             created_at: lnb.created_at || new Date().toISOString(),
             updated_at: lnb.updated_at || new Date().toISOString(),
           });
+          if (!nbErr) remoteNotebooks.push(lnb);
+        }
 
-          if (!nbErr) {
-            remoteNotebooks.unshift(lnb);
-            remoteNotebookIds.add(lnb.id);
-          } else {
-            console.warn('Failed to push notebook to Supabase:', nbErr);
-          }
+        // Upload initial host pages in parallel
+        const validPagesToUpload = localPages.filter(p => p.notebook_id && isValidUUID(p.notebook_id));
+        if (validPagesToUpload.length > 0) {
+          await Promise.all(validPagesToUpload.map(p => {
+            let formattedData = p.canvas_data;
+            if (typeof p.canvas_data === 'string') {
+              try { formattedData = JSON.parse(p.canvas_data); } catch {}
+            }
+            return supabase.from('pages').upsert({
+              id: p.id,
+              notebook_id: p.notebook_id,
+              user_id: userId,
+              name: p.name,
+              order_index: p.order_index,
+              canvas_data: formattedData,
+              created_at: p.created_at || new Date().toISOString(),
+              updated_at: p.updated_at || new Date().toISOString(),
+            });
+          }));
         }
       }
-          // Step 5: Push all local pages with content to Supabase for all notebooks in parallel
-      let uploadedPagesCount = 0;
-      const validPagesToUpload = localPages.filter(p => p.notebook_id && isValidUUID(p.notebook_id));
-      
-      if (validPagesToUpload.length > 0) {
-        const uploadPromises = validPagesToUpload.map(async (p) => {
-          let formattedData = p.canvas_data;
-          if (typeof p.canvas_data === 'string') {
-            try { formattedData = JSON.parse(p.canvas_data); } catch {}
-          }
-          const { error: pErr } = await supabase.from('pages').upsert({
-            id: p.id,
-            notebook_id: p.notebook_id,
-            user_id: userId,
-            name: p.name,
-            order_index: p.order_index,
-            canvas_data: formattedData,
-            created_at: p.created_at || new Date().toISOString(),
-            updated_at: p.updated_at || new Date().toISOString(),
-          });
-          if (!pErr) uploadedPagesCount++;
-          else console.warn('Supabase upsert page error:', pErr);
-        });
 
-        // Run uploads in parallel
-        await Promise.all(uploadPromises);
-      }
-
-      // Step 6: Merge remote data with local data
-      const finalFoldersMap = new Map<string, FolderRow>();
-      localFolders.forEach(f => finalFoldersMap.set(f.id, f));
-      remoteFolders.forEach(f => finalFoldersMap.set(f.id, f));
-      const finalFolders = Array.from(finalFoldersMap.values()).sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
-
-      const finalNotebooksMap = new Map<string, NotebookRow>();
-      localNotebooks.forEach(n => finalNotebooksMap.set(n.id, n));
-      remoteNotebooks.forEach(n => finalNotebooksMap.set(n.id, n));
-      const finalNotebooks = Array.from(finalNotebooksMap.values()).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+      // Case B: Normal Sync / Secondary Device Sync / Cloud Authority
+      // Supabase is the single source of truth!
+      // If a notebook or folder was deleted on ANY device, remoteNotebooks won't have it,
+      // so we strictly use remoteNotebooks & remoteFolders and purge deleted local entries!
+      const remoteNotebookIdSet = new Set(remoteNotebooks.map(n => n.id));
+      const prunedLocalPages = localPages.filter(p => remoteNotebookIdSet.has(p.notebook_id));
 
       set({ 
-        folders: finalFolders, 
-        notebooks: finalNotebooks, 
+        folders: remoteFolders, 
+        notebooks: remoteNotebooks, 
         isSyncing: false, 
-        syncStatusText: uploadedPagesCount > 0 ? `Synced ${uploadedPagesCount} pages!` : 'All notebooks synced'
+        syncStatusText: 'Synced with cloud'
       });
-      setLocalData(STORAGE_KEYS.FOLDERS, finalFolders);
-      setLocalData(STORAGE_KEYS.NOTEBOOKS, finalNotebooks);
+
+      setLocalData(STORAGE_KEYS.FOLDERS, remoteFolders);
+      setLocalData(STORAGE_KEYS.NOTEBOOKS, remoteNotebooks);
+      setLocalData(STORAGE_KEYS.PAGES, prunedLocalPages);
 
       setTimeout(() => {
         set({ syncStatusText: null });
-      }, 4000);
+      }, 3000);
     } catch (err) {
       console.warn('Supabase fetchLibrary sync error:', err);
       set({ isSyncing: false, syncStatusText: 'Sync failed (offline)' });
@@ -708,6 +687,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
     if (isValidUUID(id)) {
       try {
+        await supabase.from('pages').delete().eq('notebook_id', id);
         await supabase.from('notebooks').delete().eq('id', id);
       } catch (err) {
         console.warn('Supabase deleteNotebook offline:', err);
@@ -766,23 +746,17 @@ export const useBoardStore = create<BoardState>((set, get) => ({
           try {
             const res = await supabase.from('pages').select('*').eq('notebook_id', id).order('order_index', { ascending: true });
             const remotePages = res.data || [];
-            if (remotePages.length === 0 && notebookPages.length > 0) {
-              // Push local pages to Supabase in background
-              for (const lp of notebookPages) {
-                let formattedData = lp.canvas_data;
-                if (typeof lp.canvas_data === 'string') {
-                  try { formattedData = JSON.parse(lp.canvas_data); } catch {}
+            if (remotePages.length > 0) {
+              const currentActive = get().activeNotebookId;
+              if (currentActive === id) {
+                const localPages = get().pages;
+                const hasLocalDrawing = localPages.some(p => p.canvas_data && (typeof p.canvas_data === 'object' ? Object.keys(p.canvas_data).length > 0 : String(p.canvas_data).length > 60));
+                if (!hasLocalDrawing && remotePages.some(rp => rp.canvas_data)) {
+                  set({ pages: remotePages });
+                  const allPages = (await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, [])) || [];
+                  const otherPages = allPages.filter(p => p.notebook_id !== id);
+                  setLocalData(STORAGE_KEYS.PAGES, [...otherPages, ...remotePages]);
                 }
-                await supabase.from('pages').upsert({
-                  id: lp.id,
-                  notebook_id: id,
-                  user_id: lp.user_id,
-                  name: lp.name,
-                  order_index: lp.order_index,
-                  canvas_data: formattedData,
-                  created_at: lp.created_at || new Date().toISOString(),
-                  updated_at: lp.updated_at || new Date().toISOString(),
-                });
               }
             }
           } catch (bgErr) {
