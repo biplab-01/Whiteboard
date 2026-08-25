@@ -153,6 +153,23 @@ const DEFAULT_BG_SETTINGS: BgSettings = {
   pageOrientation: 'portrait',
 };
 
+// UUID generation utility (RFC 4122 v4)
+export const generateUUID = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
+
+export const isValidUUID = (id: string | null | undefined): boolean => {
+  if (!id) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+};
+
 // Storage keys
 export const STORAGE_KEYS = {
   FOLDERS: 'nova_folders',
@@ -161,6 +178,110 @@ export const STORAGE_KEYS = {
   BG_SETTINGS: 'nova_bg_settings',
   PAGE_BG_SETTINGS: 'nova_page_bg_settings',
   ACTIVE_NOTEBOOK: 'nova_active_notebook_id',
+};
+
+// Helper to migrate legacy non-UUID IDs in local storage to valid UUIDs and update foreign keys
+const normalizeAndMigrateLocalData = async (userId: string) => {
+  const isAuthUser = isValidUUID(userId);
+  const rawFolders = await getIdbItem<FolderRow[]>(STORAGE_KEYS.FOLDERS, getLocalData<FolderRow[]>(STORAGE_KEYS.FOLDERS, []));
+  const rawNotebooks = await getIdbItem<NotebookRow[]>(STORAGE_KEYS.NOTEBOOKS, getLocalData<NotebookRow[]>(STORAGE_KEYS.NOTEBOOKS, []));
+  const rawPages = await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []));
+  const pageBgMap = await getIdbItem<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, getLocalData<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {}));
+  let activeNotebookId = getLocalData<string | null>(STORAGE_KEYS.ACTIVE_NOTEBOOK, null);
+
+  const folderIdMap = new Map<string, string>();
+  const notebookIdMap = new Map<string, string>();
+  const pageIdMap = new Map<string, string>();
+
+  let hasChanges = false;
+
+  // Migrate folders
+  const migratedFolders: FolderRow[] = rawFolders.map(f => {
+    let fid = f.id;
+    if (!isValidUUID(fid)) {
+      fid = generateUUID();
+      folderIdMap.set(f.id, fid);
+      hasChanges = true;
+    }
+    return {
+      ...f,
+      id: fid,
+      user_id: isAuthUser ? userId : f.user_id,
+    };
+  });
+
+  // Migrate notebooks
+  const migratedNotebooks: NotebookRow[] = rawNotebooks.map(nb => {
+    let nbid = nb.id;
+    if (!isValidUUID(nbid)) {
+      nbid = generateUUID();
+      notebookIdMap.set(nb.id, nbid);
+      hasChanges = true;
+    }
+    let fId = nb.folder_id;
+    if (fId && folderIdMap.has(fId)) {
+      fId = folderIdMap.get(fId)!;
+      hasChanges = true;
+    } else if (fId && !isValidUUID(fId)) {
+      fId = null;
+      hasChanges = true;
+    }
+    return {
+      ...nb,
+      id: nbid,
+      folder_id: fId,
+      user_id: isAuthUser ? userId : nb.user_id,
+    };
+  });
+
+  // Migrate pages
+  const migratedPages: PageRow[] = rawPages.map(p => {
+    let pid = p.id;
+    if (!isValidUUID(pid)) {
+      pid = generateUUID();
+      pageIdMap.set(p.id, pid);
+      hasChanges = true;
+    }
+    let nbId = p.notebook_id;
+    if (notebookIdMap.has(nbId)) {
+      nbId = notebookIdMap.get(nbId)!;
+      hasChanges = true;
+    }
+    return {
+      ...p,
+      id: pid,
+      notebook_id: nbId,
+      user_id: isAuthUser ? userId : p.user_id,
+    };
+  });
+
+  // Migrate page background settings map
+  const updatedPageBgMap: Record<string, BgSettings> = {};
+  for (const [key, val] of Object.entries(pageBgMap)) {
+    const newKey = pageIdMap.get(key) || key;
+    updatedPageBgMap[newKey] = val;
+    if (newKey !== key) hasChanges = true;
+  }
+
+  // Migrate active notebook ID
+  if (activeNotebookId && notebookIdMap.has(activeNotebookId)) {
+    activeNotebookId = notebookIdMap.get(activeNotebookId)!;
+    hasChanges = true;
+  }
+
+  if (hasChanges || isAuthUser) {
+    setLocalData(STORAGE_KEYS.FOLDERS, migratedFolders);
+    setLocalData(STORAGE_KEYS.NOTEBOOKS, migratedNotebooks);
+    setLocalData(STORAGE_KEYS.PAGES, migratedPages);
+    setLocalData(STORAGE_KEYS.PAGE_BG_SETTINGS, updatedPageBgMap);
+    if (activeNotebookId) setLocalData(STORAGE_KEYS.ACTIVE_NOTEBOOK, activeNotebookId);
+  }
+
+  return {
+    folders: migratedFolders,
+    notebooks: migratedNotebooks,
+    pages: migratedPages,
+  };
 };
 
 // Initialize background storage hydration from IndexedDB
@@ -213,33 +334,102 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   pageOrientation: initialBg.pageOrientation || 'portrait',
 
   fetchLibrary: async (userId) => {
-    // Load cached first
-    const cachedFolders = getLocalData<FolderRow[]>(STORAGE_KEYS.FOLDERS, []);
-    const cachedNotebooks = getLocalData<NotebookRow[]>(STORAGE_KEYS.NOTEBOOKS, []);
-    set({ folders: cachedFolders, notebooks: cachedNotebooks });
+    const isAuthUser = isValidUUID(userId);
+
+    // Step 1: Migrate local data if needed & set immediate local state
+    const { folders: localFolders, notebooks: localNotebooks, pages: localPages } = await normalizeAndMigrateLocalData(userId);
+    set({ folders: localFolders, notebooks: localNotebooks });
+
+    if (!isAuthUser) return;
 
     try {
+      // Step 2: Fetch remote folders and notebooks from Supabase
       const [foldersRes, notebooksRes] = await Promise.all([
         supabase.from('folders').select('*').eq('user_id', userId).order('created_at', { ascending: true }),
         supabase.from('notebooks').select('*').eq('user_id', userId).order('created_at', { ascending: false })
       ]);
-      
-      if (foldersRes.data && foldersRes.data.length > 0) {
-        set({ folders: foldersRes.data });
-        setLocalData(STORAGE_KEYS.FOLDERS, foldersRes.data);
+
+      const remoteFolders = foldersRes.data || [];
+      const remoteNotebooks = notebooksRes.data || [];
+      const remoteFolderIds = new Set(remoteFolders.map(f => f.id));
+
+      // Step 3: Push local folders that aren't in Supabase yet
+      for (const lf of localFolders) {
+        if (!remoteFolderIds.has(lf.id)) {
+          const { data: newF } = await supabase.from('folders').insert({
+            id: lf.id,
+            name: lf.name,
+            user_id: userId,
+            created_at: lf.created_at || new Date().toISOString()
+          }).select().single();
+          if (newF) {
+            remoteFolders.push(newF);
+            remoteFolderIds.add(newF.id);
+          }
+        }
       }
-      if (notebooksRes.data && notebooksRes.data.length > 0) {
-        set({ notebooks: notebooksRes.data });
-        setLocalData(STORAGE_KEYS.NOTEBOOKS, notebooksRes.data);
+
+      // Step 4: Push local notebooks and their pages that aren't in Supabase yet
+      const remoteNotebookIds = new Set(remoteNotebooks.map(n => n.id));
+      for (const lnb of localNotebooks) {
+        if (!remoteNotebookIds.has(lnb.id)) {
+          const validFolderId = (lnb.folder_id && remoteFolderIds.has(lnb.folder_id)) ? lnb.folder_id : null;
+          const { error: nbErr } = await supabase.from('notebooks').insert({
+            id: lnb.id,
+            name: lnb.name,
+            folder_id: validFolderId,
+            user_id: userId,
+            created_at: lnb.created_at || new Date().toISOString(),
+            updated_at: lnb.updated_at || new Date().toISOString(),
+          });
+
+          if (!nbErr) {
+            remoteNotebooks.unshift(lnb);
+            remoteNotebookIds.add(lnb.id);
+
+            // Upload pages for this notebook
+            const pagesForNb = localPages.filter(p => p.notebook_id === lnb.id);
+            for (const p of pagesForNb) {
+              await supabase.from('pages').upsert({
+                id: p.id,
+                notebook_id: lnb.id,
+                user_id: userId,
+                name: p.name,
+                order_index: p.order_index,
+                canvas_data: p.canvas_data,
+                created_at: p.created_at || new Date().toISOString(),
+                updated_at: p.updated_at || new Date().toISOString(),
+              });
+            }
+          } else {
+            console.warn('Failed to push notebook to Supabase:', nbErr);
+          }
+        }
       }
+
+      // Step 5: Merge remote data with local data
+      const finalFoldersMap = new Map<string, FolderRow>();
+      localFolders.forEach(f => finalFoldersMap.set(f.id, f));
+      remoteFolders.forEach(f => finalFoldersMap.set(f.id, f));
+      const finalFolders = Array.from(finalFoldersMap.values()).sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+
+      const finalNotebooksMap = new Map<string, NotebookRow>();
+      localNotebooks.forEach(n => finalNotebooksMap.set(n.id, n));
+      remoteNotebooks.forEach(n => finalNotebooksMap.set(n.id, n));
+      const finalNotebooks = Array.from(finalNotebooksMap.values()).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+
+      set({ folders: finalFolders, notebooks: finalNotebooks });
+      setLocalData(STORAGE_KEYS.FOLDERS, finalFolders);
+      setLocalData(STORAGE_KEYS.NOTEBOOKS, finalNotebooks);
     } catch (err) {
-      console.warn('Supabase fetchLibrary offline, using local data:', err);
+      console.warn('Supabase fetchLibrary sync error:', err);
     }
   },
 
   createFolder: async (name, userId) => {
+    const folderId = generateUUID();
     const newFolder: FolderRow = {
-      id: `folder_${Math.random().toString(36).substring(2, 9)}`,
+      id: folderId,
       name,
       user_id: userId,
       created_at: new Date().toISOString()
@@ -249,15 +439,17 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     set({ folders: updatedFolders });
     setLocalData(STORAGE_KEYS.FOLDERS, updatedFolders);
 
-    try {
-      const res = await supabase.from('folders').insert({ name, user_id: userId }).select().single();
-      if (res.data) {
-        const synced = updatedFolders.map(f => f.id === newFolder.id ? res.data : f);
-        set({ folders: synced });
-        setLocalData(STORAGE_KEYS.FOLDERS, synced);
+    if (isValidUUID(userId)) {
+      try {
+        const res = await supabase.from('folders').insert({ id: folderId, name, user_id: userId }).select().single();
+        if (res.data) {
+          const synced = updatedFolders.map(f => f.id === newFolder.id ? res.data : f);
+          set({ folders: synced });
+          setLocalData(STORAGE_KEYS.FOLDERS, synced);
+        }
+      } catch (err) {
+        console.warn('Supabase createFolder offline, kept local:', err);
       }
-    } catch (err) {
-      console.warn('Supabase createFolder offline, kept local:', err);
     }
   },
 
@@ -269,19 +461,23 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     setLocalData(STORAGE_KEYS.FOLDERS, updatedFolders);
     setLocalData(STORAGE_KEYS.NOTEBOOKS, updatedNotebooks);
 
-    try {
-      await supabase.from('notebooks').update({ folder_id: null }).eq('folder_id', folderId);
-      await supabase.from('folders').delete().eq('id', folderId);
-    } catch (err) {
-      console.warn('Supabase deleteFolder offline:', err);
+    if (isValidUUID(folderId)) {
+      try {
+        await supabase.from('notebooks').update({ folder_id: null }).eq('folder_id', folderId);
+        await supabase.from('folders').delete().eq('id', folderId);
+      } catch (err) {
+        console.warn('Supabase deleteFolder offline:', err);
+      }
     }
   },
 
   createNotebook: async (name, folderId, userId) => {
+    const notebookId = generateUUID();
+    const validFolderId = (folderId && isValidUUID(folderId)) ? folderId : null;
     const newNotebook: NotebookRow = {
-      id: `nb_${Math.random().toString(36).substring(2, 9)}_${Date.now()}`,
+      id: notebookId,
       name,
-      folder_id: folderId,
+      folder_id: validFolderId,
       user_id: userId,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -292,9 +488,10 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     setLocalData(STORAGE_KEYS.NOTEBOOKS, updatedNotebooks);
 
     // Also prepare an initial page for this notebook
+    const defaultPageId = generateUUID();
     const defaultPage: PageRow = {
-      id: `page_${Math.random().toString(36).substring(2, 9)}`,
-      notebook_id: newNotebook.id,
+      id: defaultPageId,
+      notebook_id: notebookId,
       user_id: userId,
       name: 'Page 1',
       order_index: 0,
@@ -303,29 +500,42 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       updated_at: new Date().toISOString()
     };
 
-    const allPages = getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []);
+    const allPages = await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []));
     setLocalData(STORAGE_KEYS.PAGES, [...allPages, defaultPage]);
 
     // Try Supabase in background
-    supabase.from('notebooks').insert({ 
-      id: newNotebook.id,
-      name, 
-      folder_id: folderId, 
-      user_id: userId 
-    }).then(({ error }) => {
-      if (error) {
-        console.warn('Supabase createNotebook offline, kept local:', error);
-      }
-    });
+    if (isValidUUID(userId)) {
+      supabase.from('notebooks').insert({ 
+        id: notebookId,
+        name, 
+        folder_id: validFolderId, 
+        user_id: userId 
+      }).then(async ({ error }) => {
+        if (error) {
+          console.warn('Supabase createNotebook offline, kept local:', error);
+        } else {
+          await supabase.from('pages').insert({
+            id: defaultPageId,
+            notebook_id: notebookId,
+            user_id: userId,
+            name: 'Page 1',
+            order_index: 0,
+            canvas_data: null,
+          });
+        }
+      });
+    }
 
-    return newNotebook.id;
+    return notebookId;
   },
 
   createNotebookWithPages: async (name, folderId, userId, pages) => {
+    const notebookId = generateUUID();
+    const validFolderId = (folderId && isValidUUID(folderId)) ? folderId : null;
     const newNotebook: NotebookRow = {
-      id: `nb_${Math.random().toString(36).substring(2, 9)}_${Date.now()}`,
+      id: notebookId,
       name: name.trim() || 'Imported Document',
-      folder_id: folderId,
+      folder_id: validFolderId,
       user_id: userId,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -337,8 +547,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
     const now = new Date().toISOString();
     const createdPages: PageRow[] = (pages.length > 0 ? pages : [{ canvasData: null, name: 'Page 1' }]).map((p, idx) => ({
-      id: `page_${Math.random().toString(36).substring(2, 9)}_${Date.now()}_${idx}`,
-      notebook_id: newNotebook.id,
+      id: generateUUID(),
+      notebook_id: notebookId,
       user_id: userId,
       name: p.name || `Page ${idx + 1}`,
       order_index: idx,
@@ -365,29 +575,31 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     setLocalData(STORAGE_KEYS.PAGE_BG_SETTINGS, pageBgMap);
 
     // Sync to Supabase in background
-    supabase.from('notebooks').insert({ 
-      id: newNotebook.id,
-      name: newNotebook.name, 
-      folder_id: folderId, 
-      user_id: userId 
-    }).then(async ({ error }) => {
-      if (error) {
-        console.warn('Supabase createNotebookWithPages offline, kept local:', error);
-      } else {
-        for (const p of createdPages) {
-          await supabase.from('pages').insert({
-            id: p.id,
-            notebook_id: newNotebook.id,
-            user_id: userId,
-            name: p.name,
-            order_index: p.order_index,
-            canvas_data: p.canvas_data,
-          });
+    if (isValidUUID(userId)) {
+      supabase.from('notebooks').insert({ 
+        id: notebookId,
+        name: newNotebook.name, 
+        folder_id: validFolderId, 
+        user_id: userId 
+      }).then(async ({ error }) => {
+        if (error) {
+          console.warn('Supabase createNotebookWithPages offline, kept local:', error);
+        } else {
+          for (const p of createdPages) {
+            await supabase.from('pages').insert({
+              id: p.id,
+              notebook_id: notebookId,
+              user_id: userId,
+              name: p.name,
+              order_index: p.order_index,
+              canvas_data: p.canvas_data,
+            });
+          }
         }
-      }
-    });
+      });
+    }
 
-    return newNotebook.id;
+    return notebookId;
   },
 
   renameNotebook: async (id, name) => {
@@ -396,10 +608,12 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     set({ notebooks: updated });
     setLocalData(STORAGE_KEYS.NOTEBOOKS, updated);
 
-    try {
-      await supabase.from('notebooks').update({ name: cleanName, updated_at: new Date().toISOString() }).eq('id', id);
-    } catch (err) {
-      console.warn('Supabase renameNotebook offline:', err);
+    if (isValidUUID(id)) {
+      try {
+        await supabase.from('notebooks').update({ name: cleanName, updated_at: new Date().toISOString() }).eq('id', id);
+      } catch (err) {
+        console.warn('Supabase renameNotebook offline:', err);
+      }
     }
   },
 
@@ -408,25 +622,30 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     set({ notebooks: updated });
     setLocalData(STORAGE_KEYS.NOTEBOOKS, updated);
 
-    const allPages = getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []);
+    const allPages = await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []));
     setLocalData(STORAGE_KEYS.PAGES, allPages.filter(p => p.notebook_id !== id));
 
-    try {
-      await supabase.from('notebooks').delete().eq('id', id);
-    } catch (err) {
-      console.warn('Supabase deleteNotebook offline:', err);
+    if (isValidUUID(id)) {
+      try {
+        await supabase.from('notebooks').delete().eq('id', id);
+      } catch (err) {
+        console.warn('Supabase deleteNotebook offline:', err);
+      }
     }
   },
 
   moveNotebook: async (notebookId, folderId) => {
-    const updated = get().notebooks.map(n => n.id === notebookId ? { ...n, folder_id: folderId } : n);
+    const validFolderId = (folderId && isValidUUID(folderId)) ? folderId : null;
+    const updated = get().notebooks.map(n => n.id === notebookId ? { ...n, folder_id: validFolderId } : n);
     set({ notebooks: updated });
     setLocalData(STORAGE_KEYS.NOTEBOOKS, updated);
 
-    try {
-      await supabase.from('notebooks').update({ folder_id: folderId }).eq('id', notebookId);
-    } catch (err) {
-      console.warn('Supabase moveNotebook offline:', err);
+    if (isValidUUID(notebookId)) {
+      try {
+        await supabase.from('notebooks').update({ folder_id: validFolderId }).eq('id', notebookId);
+      } catch (err) {
+        console.warn('Supabase moveNotebook offline:', err);
+      }
     }
   },
 
@@ -441,8 +660,9 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     // If no pages exist yet for this notebook, create Page 1
     if (notebookPages.length === 0) {
       const notebook = get().notebooks.find(n => n.id === id);
+      const newPageId = generateUUID();
       const newPage: PageRow = {
-        id: `page_${Math.random().toString(36).substring(2, 9)}`,
+        id: newPageId,
         notebook_id: id,
         user_id: notebook?.user_id || 'guest',
         name: 'Page 1',
@@ -453,6 +673,19 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       };
       notebookPages = [newPage];
       setLocalData(STORAGE_KEYS.PAGES, [...allPages, newPage]);
+
+      if (notebook?.user_id && isValidUUID(notebook.user_id)) {
+        supabase.from('pages').insert({
+          id: newPageId,
+          notebook_id: id,
+          user_id: notebook.user_id,
+          name: 'Page 1',
+          order_index: 0,
+          canvas_data: null
+        }).then(({ error }) => {
+          if (error) console.warn('Supabase create default page error:', error);
+        });
+      }
     }
 
     const firstPageId = notebookPages[0]?.id || null;
@@ -473,14 +706,49 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     });
 
     // Try Supabase in background without destroying newer local pages
-    try {
-      const res = await supabase.from('pages').select('*').eq('notebook_id', id).order('order_index', { ascending: true });
-      if (res.data && res.data.length > 0) {
+    if (isValidUUID(id)) {
+      try {
+        const res = await supabase.from('pages').select('*').eq('notebook_id', id).order('order_index', { ascending: true });
+        const remotePages = res.data || [];
+        const remotePageIds = new Set(remotePages.map(p => p.id));
         const currentLocal = get().pages;
+
+        // If remote has no pages but local has pages, upload local pages to remote
+        if (remotePages.length === 0 && currentLocal.length > 0) {
+          for (const lp of currentLocal) {
+            if (isValidUUID(lp.user_id)) {
+              await supabase.from('pages').upsert({
+                id: lp.id,
+                notebook_id: id,
+                user_id: lp.user_id,
+                name: lp.name,
+                order_index: lp.order_index,
+                canvas_data: lp.canvas_data,
+                created_at: lp.created_at || new Date().toISOString(),
+                updated_at: lp.updated_at || new Date().toISOString()
+              });
+            }
+          }
+        } else {
+          // If local has pages not in remote, push them to remote
+          for (const lp of currentLocal) {
+            if (!remotePageIds.has(lp.id) && isValidUUID(lp.user_id)) {
+              await supabase.from('pages').upsert({
+                id: lp.id,
+                notebook_id: id,
+                user_id: lp.user_id,
+                name: lp.name,
+                order_index: lp.order_index,
+                canvas_data: lp.canvas_data,
+              });
+            }
+          }
+        }
+
         const mergedPagesMap = new Map<string, PageRow>();
         
         // Remote pages
-        res.data.forEach(p => mergedPagesMap.set(p.id, p));
+        remotePages.forEach(p => mergedPagesMap.set(p.id, p));
         // Keep local pages if they have canvas_data or do not exist remotely yet
         currentLocal.forEach(p => {
           const remote = mergedPagesMap.get(p.id);
@@ -490,21 +758,23 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         });
         const mergedPages = Array.from(mergedPagesMap.values()).sort((a, b) => a.order_index - b.order_index);
 
-        const currentActivePageId = get().currentPageId;
-        const validActivePageId = mergedPages.some(p => p.id === currentActivePageId) ? currentActivePageId : (mergedPages[0]?.id || null);
+        if (mergedPages.length > 0) {
+          const currentActivePageId = get().currentPageId;
+          const validActivePageId = mergedPages.some(p => p.id === currentActivePageId) ? currentActivePageId : (mergedPages[0]?.id || null);
 
-        set({ 
-          pages: mergedPages,
-          currentPageId: validActivePageId,
-        });
+          set({ 
+            pages: mergedPages,
+            currentPageId: validActivePageId,
+          });
 
-        // Also sync merged state to IndexedDB
-        const freshAllPages = await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []));
-        const otherPages = freshAllPages.filter(p => p.notebook_id !== id);
-        setLocalData(STORAGE_KEYS.PAGES, [...otherPages, ...mergedPages]);
+          // Also sync merged state to IndexedDB
+          const freshAllPages = await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []));
+          const otherPages = freshAllPages.filter(p => p.notebook_id !== id);
+          setLocalData(STORAGE_KEYS.PAGES, [...otherPages, ...mergedPages]);
+        }
+      } catch (err) {
+        console.warn('Supabase openNotebook offline:', err);
       }
-    } catch (err) {
-      console.warn('Supabase openNotebook offline:', err);
     }
   },
 
@@ -517,8 +787,9 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const { activeNotebookId, pages, bgType, bgColor, isRuled, ruleColor, pageSize, pageOrientation } = get();
     if (!activeNotebookId) return;
 
+    const newPageId = generateUUID();
     const newPage: PageRow = {
-      id: `page_${Math.random().toString(36).substring(2, 9)}`,
+      id: newPageId,
       notebook_id: activeNotebookId,
       user_id: userId,
       name: `Page ${pages.length + 1}`,
@@ -539,15 +810,18 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const allPages = await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []));
     setLocalData(STORAGE_KEYS.PAGES, [...allPages, newPage]);
 
-    try {
-      await supabase.from('pages').insert({
-        notebook_id: activeNotebookId,
-        user_id: userId,
-        name: `Page ${pages.length + 1}`,
-        order_index: pages.length
-      });
-    } catch (err) {
-      console.warn('Supabase addPage offline:', err);
+    if (isValidUUID(userId)) {
+      try {
+        await supabase.from('pages').insert({
+          id: newPageId,
+          notebook_id: activeNotebookId,
+          user_id: userId,
+          name: `Page ${pages.length + 1}`,
+          order_index: pages.length
+        });
+      } catch (err) {
+        console.warn('Supabase addPage offline:', err);
+      }
     }
   },
 
@@ -563,10 +837,12 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const allPages = await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []));
     setLocalData(STORAGE_KEYS.PAGES, allPages.filter(p => p.id !== id));
 
-    try {
-      await supabase.from('pages').delete().eq('id', id);
-    } catch (err) {
-      console.warn('Supabase removePage offline:', err);
+    if (isValidUUID(id)) {
+      try {
+        await supabase.from('pages').delete().eq('id', id);
+      } catch (err) {
+        console.warn('Supabase removePage offline:', err);
+      }
     }
   },
 
@@ -600,10 +876,12 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     }
     setLocalData(STORAGE_KEYS.PAGES, updatedAllPages);
 
-    try {
-      await supabase.from('pages').update({ canvas_data: canvasData as any, updated_at: new Date().toISOString() }).eq('id', id);
-    } catch (err) {
-      // offline save succeeded
+    if (isValidUUID(id)) {
+      try {
+        await supabase.from('pages').update({ canvas_data: canvasData as any, updated_at: new Date().toISOString() }).eq('id', id);
+      } catch (err) {
+        // offline save succeeded
+      }
     }
   },
 
@@ -616,7 +894,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
     const now = new Date().toISOString();
     const newCreatedPages: PageRow[] = pdfPages.map((item, idx) => ({
-      id: `page_${Math.random().toString(36).substring(2, 9)}_${Date.now()}_${idx}`,
+      id: generateUUID(),
       notebook_id: activeNotebookId,
       user_id: userId,
       name: item.name || `Page ${pages.length + idx + 1}`,
@@ -672,19 +950,21 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     setLocalData(STORAGE_KEYS.PAGES, [...otherNotebookPages, ...combined]);
 
     // Sync to Supabase in background
-    try {
-      for (const p of newCreatedPages) {
-        await supabase.from('pages').insert({
-          id: p.id,
-          notebook_id: activeNotebookId,
-          user_id: userId,
-          name: p.name,
-          order_index: p.order_index,
-          canvas_data: p.canvas_data,
-        });
+    if (isValidUUID(userId)) {
+      try {
+        for (const p of newCreatedPages) {
+          await supabase.from('pages').insert({
+            id: p.id,
+            notebook_id: activeNotebookId,
+            user_id: userId,
+            name: p.name,
+            order_index: p.order_index,
+            canvas_data: p.canvas_data,
+          });
+        }
+      } catch (err) {
+        console.warn('Supabase importPdfPages offline:', err);
       }
-    } catch (err) {
-      console.warn('Supabase importPdfPages offline:', err);
     }
   },
 
