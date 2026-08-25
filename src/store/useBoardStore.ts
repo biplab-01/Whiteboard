@@ -450,32 +450,32 @@ export const useBoardStore = create<BoardState>((set, get) => ({
           }
         }
       }
-
-      // Step 5: Push all local pages with content to Supabase for all notebooks
+          // Step 5: Push all local pages with content to Supabase for all notebooks in parallel
       let uploadedPagesCount = 0;
-      for (const p of localPages) {
-        if (p.notebook_id && isValidUUID(p.notebook_id)) {
+      const validPagesToUpload = localPages.filter(p => p.notebook_id && isValidUUID(p.notebook_id));
+      
+      if (validPagesToUpload.length > 0) {
+        const uploadPromises = validPagesToUpload.map(async (p) => {
           let formattedData = p.canvas_data;
           if (typeof p.canvas_data === 'string') {
             try { formattedData = JSON.parse(p.canvas_data); } catch {}
           }
-          try {
-            const { error: pErr } = await supabase.from('pages').upsert({
-              id: p.id,
-              notebook_id: p.notebook_id,
-              user_id: userId,
-              name: p.name,
-              order_index: p.order_index,
-              canvas_data: formattedData,
-              created_at: p.created_at || new Date().toISOString(),
-              updated_at: p.updated_at || new Date().toISOString(),
-            });
-            if (!pErr) uploadedPagesCount++;
-            else console.warn('Supabase upsert page error:', pErr);
-          } catch (pageErr) {
-            console.warn('Failed to upsert page to Supabase:', pageErr);
-          }
-        }
+          const { error: pErr } = await supabase.from('pages').upsert({
+            id: p.id,
+            notebook_id: p.notebook_id,
+            user_id: userId,
+            name: p.name,
+            order_index: p.order_index,
+            canvas_data: formattedData,
+            created_at: p.created_at || new Date().toISOString(),
+            updated_at: p.updated_at || new Date().toISOString(),
+          });
+          if (!pErr) uploadedPagesCount++;
+          else console.warn('Supabase upsert page error:', pErr);
+        });
+
+        // Run uploads in parallel
+        await Promise.all(uploadPromises);
       }
 
       // Step 6: Merge remote data with local data
@@ -628,16 +628,22 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     setLocalData(STORAGE_KEYS.NOTEBOOKS, updatedNotebooks);
 
     const now = new Date().toISOString();
-    const createdPages: PageRow[] = (pages.length > 0 ? pages : [{ canvasData: null, name: 'Page 1' }]).map((p, idx) => ({
-      id: generateUUID(),
-      notebook_id: notebookId,
-      user_id: userId,
-      name: p.name || `Page ${idx + 1}`,
-      order_index: idx,
-      canvas_data: (p.canvasData || null) as any,
-      created_at: now,
-      updated_at: now,
-    }));
+    const createdPages: PageRow[] = (pages.length > 0 ? pages : [{ canvasData: null, name: 'Page 1' }]).map((p, idx) => {
+      let formattedData: any = p.canvasData;
+      if (typeof p.canvasData === 'string') {
+        try { formattedData = JSON.parse(p.canvasData); } catch {}
+      }
+      return {
+        id: generateUUID(),
+        notebook_id: notebookId,
+        user_id: userId,
+        name: p.name || `Page ${idx + 1}`,
+        order_index: idx,
+        canvas_data: formattedData,
+        created_at: now,
+        updated_at: now,
+      };
+    });
 
     const allPages = (await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, [])) || [];
     setLocalData(STORAGE_KEYS.PAGES, [...allPages, ...createdPages]);
@@ -736,57 +742,81 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 
   openNotebook: async (id) => {
-    set({ loading: true });
     setLocalData(STORAGE_KEYS.ACTIVE_NOTEBOOK, id);
     
-    // Look up in local pages (checking IndexedDB cache)
-    const allPages = (await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, [])) || [];
-    let notebookPages = allPages.filter(p => p.notebook_id === id).sort((a, b) => a.order_index - b.order_index);
+    // Step 1: Instant Local Hydration (0ms wait)
+    const cachedPages = getCachedData<PageRow[]>(STORAGE_KEYS.PAGES, []);
+    let notebookPages = cachedPages.filter(p => p.notebook_id === id).sort((a, b) => a.order_index - b.order_index);
 
-    // Fetch remote pages from Supabase and sync
+    if (notebookPages.length === 0) {
+      // Check IndexedDB storage if not in memory cache
+      const idbPages = (await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, [])) || [];
+      notebookPages = idbPages.filter(p => p.notebook_id === id).sort((a, b) => a.order_index - b.order_index);
+    }
+
+    // If local pages exist, open INSTANTLY
+    if (notebookPages.length > 0) {
+      const firstPageId = notebookPages[0]?.id || null;
+      const pageBgMap = getCachedData<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {});
+      const savedBg = (firstPageId && pageBgMap[firstPageId]) || getLocalData<BgSettings>(STORAGE_KEYS.BG_SETTINGS, DEFAULT_BG_SETTINGS);
+
+      set({ 
+        activeNotebookId: id, 
+        pages: notebookPages,
+        currentPageId: firstPageId,
+        bgType: savedBg.bgType,
+        bgColor: savedBg.bgColor,
+        isRuled: savedBg.isRuled,
+        ruleColor: savedBg.ruleColor,
+        pageSize: savedBg.pageSize || 'a4',
+        pageOrientation: savedBg.pageOrientation || 'portrait',
+        loading: false
+      });
+
+      // Background Non-blocking sync with Supabase
+      if (isValidUUID(id)) {
+        setTimeout(async () => {
+          try {
+            const res = await supabase.from('pages').select('*').eq('notebook_id', id).order('order_index', { ascending: true });
+            const remotePages = res.data || [];
+            if (remotePages.length === 0 && notebookPages.length > 0) {
+              // Push local pages to Supabase in background
+              for (const lp of notebookPages) {
+                let formattedData = lp.canvas_data;
+                if (typeof lp.canvas_data === 'string') {
+                  try { formattedData = JSON.parse(lp.canvas_data); } catch {}
+                }
+                await supabase.from('pages').upsert({
+                  id: lp.id,
+                  notebook_id: id,
+                  user_id: lp.user_id,
+                  name: lp.name,
+                  order_index: lp.order_index,
+                  canvas_data: formattedData,
+                  created_at: lp.created_at || new Date().toISOString(),
+                  updated_at: lp.updated_at || new Date().toISOString(),
+                });
+              }
+            }
+          } catch (bgErr) {
+            console.warn('Background page sync error:', bgErr);
+          }
+        }, 100);
+      }
+      return;
+    }
+
+    // Step 2: If NO local pages exist (e.g. fresh device from cloud), fetch from Supabase
+    set({ loading: true });
     if (isValidUUID(id)) {
       try {
         const res = await supabase.from('pages').select('*').eq('notebook_id', id).order('order_index', { ascending: true });
         const remotePages = res.data || [];
-        
         if (remotePages.length > 0) {
-          const mergedPagesMap = new Map<string, PageRow>();
-          remotePages.forEach(p => mergedPagesMap.set(p.id, p));
-          notebookPages.forEach(lp => {
-            const remote = mergedPagesMap.get(lp.id);
-            if (!remote) {
-              mergedPagesMap.set(lp.id, lp);
-            } else if (lp.canvas_data && !remote.canvas_data) {
-              mergedPagesMap.set(lp.id, lp);
-              let formattedData = lp.canvas_data;
-              if (typeof lp.canvas_data === 'string') {
-                try { formattedData = JSON.parse(lp.canvas_data); } catch {}
-              }
-              supabase.from('pages').update({ canvas_data: formattedData }).eq('id', lp.id).then();
-            }
-          });
-          notebookPages = Array.from(mergedPagesMap.values()).sort((a, b) => a.order_index - b.order_index);
-        } else if (notebookPages.length > 0) {
-          // Upload local pages to Supabase
-          for (const lp of notebookPages) {
-            let formattedData = lp.canvas_data;
-            if (typeof lp.canvas_data === 'string') {
-              try { formattedData = JSON.parse(lp.canvas_data); } catch {}
-            }
-            await supabase.from('pages').upsert({
-              id: lp.id,
-              notebook_id: id,
-              user_id: lp.user_id,
-              name: lp.name,
-              order_index: lp.order_index,
-              canvas_data: formattedData,
-              created_at: lp.created_at || new Date().toISOString(),
-              updated_at: lp.updated_at || new Date().toISOString(),
-            });
-          }
+          notebookPages = remotePages;
         }
       } catch (err) {
-        console.warn('Supabase openNotebook offline:', err);
+        console.warn('Supabase openNotebook fetch error:', err);
       }
     }
 
