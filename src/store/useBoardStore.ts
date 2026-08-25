@@ -363,30 +363,31 @@ export const getPageBackgroundSettings = (pageId?: string | null): BgSettings =>
   return pageBgMap[pageId] || getLocalData<BgSettings>(STORAGE_KEYS.BG_SETTINGS, DEFAULT_BG_SETTINGS);
 };
 
-const initialActiveNotebook = getLocalData<string | null>(STORAGE_KEYS.ACTIVE_NOTEBOOK, null);
-const initialPages = initialActiveNotebook
-  ? getLocalData<PageRow[]>(STORAGE_KEYS.PAGES, []).filter(p => p.notebook_id === initialActiveNotebook)
-  : [];
-const initialCurrentPageId = initialPages[0]?.id || null;
-const pageBgMap = getLocalData<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {});
-const initialBg = (initialCurrentPageId && pageBgMap[initialCurrentPageId]) || getLocalData<BgSettings>(STORAGE_KEYS.BG_SETTINGS, DEFAULT_BG_SETTINGS);
+// Clean up any stale active notebook key on browser load so user always lands on Dashboard
+if (typeof window !== 'undefined') {
+  try {
+    localStorage.removeItem(STORAGE_KEYS.ACTIVE_NOTEBOOK);
+  } catch {
+    // ignore
+  }
+}
 
 export const useBoardStore = create<BoardState>((set, get) => ({
   folders: getLocalData<FolderRow[]>(STORAGE_KEYS.FOLDERS, []),
   notebooks: getLocalData<NotebookRow[]>(STORAGE_KEYS.NOTEBOOKS, []),
-  activeNotebookId: initialActiveNotebook,
-  pages: initialPages,
-  currentPageId: initialCurrentPageId,
+  activeNotebookId: null,
+  pages: [],
+  currentPageId: null,
   loading: false,
   isSyncing: false,
   syncStatusText: null,
 
-  bgType: initialBg.bgType,
-  bgColor: initialBg.bgColor,
-  isRuled: initialBg.isRuled,
-  ruleColor: initialBg.ruleColor,
-  pageSize: initialBg.pageSize || 'a4',
-  pageOrientation: initialBg.pageOrientation || 'portrait',
+  bgType: DEFAULT_BG_SETTINGS.bgType,
+  bgColor: DEFAULT_BG_SETTINGS.bgColor,
+  isRuled: DEFAULT_BG_SETTINGS.isRuled,
+  ruleColor: DEFAULT_BG_SETTINGS.ruleColor,
+  pageSize: DEFAULT_BG_SETTINGS.pageSize || 'a4',
+  pageOrientation: DEFAULT_BG_SETTINGS.pageOrientation || 'portrait',
 
   fetchLibrary: async (userId) => {
     const isAuthUser = isValidUUID(userId);
