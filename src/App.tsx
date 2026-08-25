@@ -86,7 +86,9 @@ function App() {
     return <div className="h-screen flex items-center justify-center bg-gray-50">Loading...</div>;
   }
 
-  if (!activeNotebookId) {
+  const isBoardOpen = Boolean(activeNotebookId && activeNotebookId !== 'null' && activeNotebookId !== 'undefined');
+
+  if (!isBoardOpen) {
     return (
       <>
         <Dashboard />

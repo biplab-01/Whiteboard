@@ -191,7 +191,6 @@ export const STORAGE_KEYS = {
   PAGES: 'nova_pages',
   BG_SETTINGS: 'nova_bg_settings',
   PAGE_BG_SETTINGS: 'nova_page_bg_settings',
-  ACTIVE_NOTEBOOK: 'nova_active_notebook_id',
 };
 
 // Helper to migrate legacy non-UUID IDs in local storage to valid UUIDs and update foreign keys
@@ -201,7 +200,6 @@ const normalizeAndMigrateLocalData = async (userId: string) => {
   let rawNotebooks = (await getIdbItem<NotebookRow[]>(STORAGE_KEYS.NOTEBOOKS, [])) || [];
   let rawPages = (await getIdbItem<PageRow[]>(STORAGE_KEYS.PAGES, [])) || [];
   let pageBgMap = (await getIdbItem<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {})) || {};
-  let activeNotebookId = getLocalData<string | null>(STORAGE_KEYS.ACTIVE_NOTEBOOK, null);
 
   // Fallbacks to localStorage if IndexedDB returned empty
   if (rawFolders.length === 0) rawFolders = getLocalData<FolderRow[]>(STORAGE_KEYS.FOLDERS, []);
@@ -316,18 +314,11 @@ const normalizeAndMigrateLocalData = async (userId: string) => {
     if (newKey !== key) hasChanges = true;
   }
 
-  // Migrate active notebook ID
-  if (activeNotebookId && notebookIdMap.has(activeNotebookId)) {
-    activeNotebookId = notebookIdMap.get(activeNotebookId)!;
-    hasChanges = true;
-  }
-
   if (hasChanges || isAuthUser) {
     setLocalData(STORAGE_KEYS.FOLDERS, migratedFolders);
     setLocalData(STORAGE_KEYS.NOTEBOOKS, migratedNotebooks);
     setLocalData(STORAGE_KEYS.PAGES, migratedPages);
     setLocalData(STORAGE_KEYS.PAGE_BG_SETTINGS, updatedPageBgMap);
-    if (activeNotebookId) setLocalData(STORAGE_KEYS.ACTIVE_NOTEBOOK, activeNotebookId);
   }
 
   return {
@@ -339,13 +330,19 @@ const normalizeAndMigrateLocalData = async (userId: string) => {
 
 // Initialize background storage hydration from IndexedDB
 if (typeof window !== 'undefined') {
+  try {
+    localStorage.removeItem('nova_active_notebook_id');
+    setIdbItem('nova_active_notebook_id', null);
+  } catch {
+    // ignore
+  }
+
   initIdbStorage([
     STORAGE_KEYS.FOLDERS,
     STORAGE_KEYS.NOTEBOOKS,
     STORAGE_KEYS.PAGES,
     STORAGE_KEYS.PAGE_BG_SETTINGS,
     STORAGE_KEYS.BG_SETTINGS,
-    STORAGE_KEYS.ACTIVE_NOTEBOOK
   ]);
 }
 
@@ -362,15 +359,6 @@ export const getPageBackgroundSettings = (pageId?: string | null): BgSettings =>
   const pageBgMap = getLocalData<Record<string, BgSettings>>(STORAGE_KEYS.PAGE_BG_SETTINGS, {});
   return pageBgMap[pageId] || getLocalData<BgSettings>(STORAGE_KEYS.BG_SETTINGS, DEFAULT_BG_SETTINGS);
 };
-
-// Clean up any stale active notebook key on browser load so user always lands on Dashboard
-if (typeof window !== 'undefined') {
-  try {
-    localStorage.removeItem(STORAGE_KEYS.ACTIVE_NOTEBOOK);
-  } catch {
-    // ignore
-  }
-}
 
 export const useBoardStore = create<BoardState>((set, get) => ({
   folders: getLocalData<FolderRow[]>(STORAGE_KEYS.FOLDERS, []),
@@ -743,8 +731,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 
   openNotebook: async (id) => {
-    setLocalData(STORAGE_KEYS.ACTIVE_NOTEBOOK, id);
-    
     // Step 1: Instant Local Hydration (0ms wait)
     const cachedPages = getCachedData<PageRow[]>(STORAGE_KEYS.PAGES, []);
     let notebookPages = cachedPages.filter(p => p.notebook_id === id).sort((a, b) => a.order_index - b.order_index);
@@ -873,7 +859,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 
   closeNotebook: () => {
-    localStorage.removeItem(STORAGE_KEYS.ACTIVE_NOTEBOOK);
     set({ activeNotebookId: null, pages: [], currentPageId: null });
   },
 
