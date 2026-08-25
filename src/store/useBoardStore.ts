@@ -64,6 +64,8 @@ export interface BoardState {
   notebooks: NotebookRow[];
   activeNotebookId: string | null;
   loading: boolean;
+  isSyncing: boolean;
+  syncStatusText: string | null;
   
   // Library Actions
   fetchLibrary: (userId: string) => Promise<void>;
@@ -170,6 +172,18 @@ export const isValidUUID = (id: string | null | undefined): boolean => {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
 };
 
+// Helper to extract timestamp from legacy ID if present
+const extractTimestampFromId = (id: string): number | null => {
+  const parts = id.split('_');
+  for (const part of parts) {
+    const num = Number(part);
+    if (!isNaN(num) && num > 1600000000000 && num < 2500000000000) {
+      return num;
+    }
+  }
+  return null;
+};
+
 // Storage keys
 export const STORAGE_KEYS = {
   FOLDERS: 'nova_folders',
@@ -240,8 +254,15 @@ const normalizeAndMigrateLocalData = async (userId: string) => {
     };
   });
 
-  // Map any pages with old notebook IDs or non-UUID page IDs
   const validNotebookIds = new Set(migratedNotebooks.map(n => n.id));
+
+  // Build timestamp to notebook map for legacy notebook/page matching
+  const notebookTimestampList = migratedNotebooks.map(nb => {
+    const ts = (nb.created_at ? new Date(nb.created_at).getTime() : null) || extractTimestampFromId(nb.id);
+    return { id: nb.id, name: nb.name, ts };
+  }).filter(item => item.ts !== null) as { id: string; name: string; ts: number }[];
+
+  // Migrate pages
   const migratedPages: PageRow[] = rawPages.map(p => {
     let pid = p.id;
     if (!isValidUUID(pid)) {
@@ -254,9 +275,30 @@ const normalizeAndMigrateLocalData = async (userId: string) => {
       nbId = notebookIdMap.get(nbId)!;
       hasChanges = true;
     } else if (!validNotebookIds.has(nbId)) {
-      // If notebook_id was an old string, try to find matching notebook by name or index
-      const matchedNb = migratedNotebooks.find(n => n.id === nbId);
-      if (matchedNb) nbId = matchedNb.id;
+      // If notebook_id was an old string, try timestamp proximity matching
+      const pageTs = extractTimestampFromId(p.notebook_id) || extractTimestampFromId(p.id) || (p.created_at ? new Date(p.created_at).getTime() : null);
+      if (pageTs && notebookTimestampList.length > 0) {
+        let closestNb = notebookTimestampList[0];
+        let minDiff = Math.abs(pageTs - closestNb.ts);
+        for (const n of notebookTimestampList) {
+          const diff = Math.abs(pageTs - n.ts);
+          if (diff < minDiff) {
+            minDiff = diff;
+            closestNb = n;
+          }
+        }
+        if (minDiff < 60000) { // within 1 minute
+          nbId = closestNb.id;
+          hasChanges = true;
+        }
+      }
+      // If still not matched, check if any notebook in migrated list has matching id
+      if (!validNotebookIds.has(nbId)) {
+        const found = migratedNotebooks.find(n => n.id === nbId);
+        if (found) {
+          nbId = found.id;
+        }
+      }
     }
     return {
       ...p,
@@ -336,6 +378,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   pages: initialPages,
   currentPageId: initialCurrentPageId,
   loading: false,
+  isSyncing: false,
+  syncStatusText: null,
 
   bgType: initialBg.bgType,
   bgColor: initialBg.bgColor,
@@ -346,12 +390,16 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
   fetchLibrary: async (userId) => {
     const isAuthUser = isValidUUID(userId);
+    set({ isSyncing: true, syncStatusText: 'Syncing with cloud...' });
 
     // Step 1: Migrate local data if needed & set immediate local state
     const { folders: localFolders, notebooks: localNotebooks, pages: localPages } = await normalizeAndMigrateLocalData(userId);
     set({ folders: localFolders, notebooks: localNotebooks });
 
-    if (!isAuthUser) return;
+    if (!isAuthUser) {
+      set({ isSyncing: false, syncStatusText: null });
+      return;
+    }
 
     try {
       // Step 2: Fetch remote folders and notebooks from Supabase
@@ -404,6 +452,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       }
 
       // Step 5: Push all local pages with content to Supabase for all notebooks
+      let uploadedPagesCount = 0;
       for (const p of localPages) {
         if (p.notebook_id && isValidUUID(p.notebook_id)) {
           let formattedData = p.canvas_data;
@@ -411,7 +460,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
             try { formattedData = JSON.parse(p.canvas_data); } catch {}
           }
           try {
-            await supabase.from('pages').upsert({
+            const { error: pErr } = await supabase.from('pages').upsert({
               id: p.id,
               notebook_id: p.notebook_id,
               user_id: userId,
@@ -421,6 +470,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
               created_at: p.created_at || new Date().toISOString(),
               updated_at: p.updated_at || new Date().toISOString(),
             });
+            if (!pErr) uploadedPagesCount++;
+            else console.warn('Supabase upsert page error:', pErr);
           } catch (pageErr) {
             console.warn('Failed to upsert page to Supabase:', pageErr);
           }
@@ -438,11 +489,22 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       remoteNotebooks.forEach(n => finalNotebooksMap.set(n.id, n));
       const finalNotebooks = Array.from(finalNotebooksMap.values()).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
 
-      set({ folders: finalFolders, notebooks: finalNotebooks });
+      set({ 
+        folders: finalFolders, 
+        notebooks: finalNotebooks, 
+        isSyncing: false, 
+        syncStatusText: uploadedPagesCount > 0 ? `Synced ${uploadedPagesCount} pages!` : 'All notebooks synced'
+      });
       setLocalData(STORAGE_KEYS.FOLDERS, finalFolders);
       setLocalData(STORAGE_KEYS.NOTEBOOKS, finalNotebooks);
+
+      setTimeout(() => {
+        set({ syncStatusText: null });
+      }, 4000);
     } catch (err) {
       console.warn('Supabase fetchLibrary sync error:', err);
+      set({ isSyncing: false, syncStatusText: 'Sync failed (offline)' });
+      setTimeout(() => { set({ syncStatusText: null }); }, 3000);
     }
   },
 
