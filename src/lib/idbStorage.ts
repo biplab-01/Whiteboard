@@ -40,7 +40,7 @@ const getDB = (): Promise<IDBDatabase> => {
 
 // Asynchronously get item from IndexedDB with fallback to memoryCache or localStorage
 export const getIdbItem = async <T>(key: string, defaultVal: T): Promise<T> => {
-  if (key in memoryCache) {
+  if (key in memoryCache && memoryCache[key] !== null && memoryCache[key] !== undefined) {
     return memoryCache[key] as T;
   }
 
@@ -70,7 +70,9 @@ export const getIdbItem = async <T>(key: string, defaultVal: T): Promise<T> => {
           } catch {
             // ignore
           }
-          memoryCache[key] = defaultVal;
+          if (defaultVal !== null && defaultVal !== undefined) {
+            memoryCache[key] = defaultVal;
+          }
           resolve(defaultVal);
         }
       };
@@ -124,7 +126,7 @@ export const setIdbItem = async <T>(key: string, value: T): Promise<void> => {
 
 // Synchronous getter from memory cache with initial localStorage check
 export const getCachedData = <T>(key: string, defaultVal: T): T => {
-  if (key in memoryCache) {
+  if (key in memoryCache && memoryCache[key] !== null && memoryCache[key] !== undefined) {
     return memoryCache[key] as T;
   }
   try {
@@ -142,5 +144,5 @@ export const getCachedData = <T>(key: string, defaultVal: T): T => {
 
 // Pre-hydrate memoryCache from IndexedDB at application boot
 export const initIdbStorage = async (keys: string[]) => {
-  await Promise.all(keys.map(k => getIdbItem(k, null)));
+  await Promise.all(keys.map(k => getIdbItem(k, [] as any)));
 };

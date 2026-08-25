@@ -1,4 +1,4 @@
-import { Moon, Search, Sun, LogOut, Plus, FileUp } from 'lucide-react';
+import { Moon, Search, Sun, LogOut, Plus, FileUp, Cloud } from 'lucide-react';
 import { useBoardStore } from '../../store/useBoardStore';
 import { useAuthStore } from '../../store/useAuthStore';
 
@@ -95,6 +95,20 @@ export const TopBar = ({ searchQuery, setSearchQuery, onOpenImportModal }: TopBa
             </>
           ) : (
             <>
+              <button
+                onClick={async () => {
+                  if (user?.id) {
+                    await useBoardStore.getState().fetchLibrary(user.id);
+                  }
+                }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                  isDarkMode ? 'border-gray-700 hover:bg-gray-800 text-indigo-300' : 'border-gray-200 hover:bg-gray-100 text-indigo-600'
+                }`}
+                title="Sync all notebooks & pages with cloud"
+              >
+                <Cloud size={14} />
+                <span className="hidden lg:inline">Sync Cloud</span>
+              </button>
               <span className="text-sm opacity-60 hidden md:block">{user?.email}</span>
               <button 
                 onClick={() => signOut()}
