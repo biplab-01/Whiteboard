@@ -47,6 +47,8 @@ export interface TextFormat {
   fontStyle: string;
   underline: boolean;
   linethrough?: boolean;
+  subscript?: boolean;
+  superscript?: boolean;
   textAlign?: 'left' | 'center' | 'right' | 'justify';
 }
 

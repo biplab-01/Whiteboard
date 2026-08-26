@@ -722,6 +722,13 @@ export const Board: React.FC = () => {
             }
           }
 
+          const isSuper = (styles.superscript !== undefined) 
+            ? !!styles.superscript 
+            : (typeof styles.deltaY === 'number' && styles.deltaY < 0);
+          const isSub = (styles.subscript !== undefined) 
+            ? !!styles.subscript 
+            : (typeof styles.deltaY === 'number' && styles.deltaY > 0);
+
           useBoardStore.getState().setActiveShapeFormat(null);
           useBoardStore.getState().setActiveTextFormat({
             fontFamily: styles.fontFamily ?? textObj.fontFamily ?? 'Inter',
@@ -732,6 +739,8 @@ export const Board: React.FC = () => {
             fontStyle: (styles.fontStyle ?? textObj.fontStyle ?? 'normal') as string,
             underline: styles.underline !== undefined ? !!styles.underline : !!textObj.underline,
             linethrough: styles.linethrough !== undefined ? !!styles.linethrough : !!textObj.linethrough,
+            subscript: isSub,
+            superscript: isSuper,
             textAlign: (textObj.textAlign as any) || 'left',
           });
         } else {
@@ -883,23 +892,52 @@ export const Board: React.FC = () => {
         const end = textObj.selectionEnd ?? 0;
         const hasSelectionRange = isEditing && start !== end;
 
+        const baseSize = typeof textObj.fontSize === 'number' ? textObj.fontSize : 24;
+        const appliedUpdates: any = { ...updates };
+
+        if (updates.superscript !== undefined) {
+          if (updates.superscript) {
+            appliedUpdates.deltaY = -Math.round(baseSize * 0.35);
+            appliedUpdates.fontSize = Math.round(baseSize * 0.65);
+            appliedUpdates.superscript = true;
+            appliedUpdates.subscript = false;
+          } else {
+            appliedUpdates.deltaY = 0;
+            appliedUpdates.fontSize = baseSize;
+            appliedUpdates.superscript = false;
+          }
+        }
+
+        if (updates.subscript !== undefined) {
+          if (updates.subscript) {
+            appliedUpdates.deltaY = Math.round(baseSize * 0.3);
+            appliedUpdates.fontSize = Math.round(baseSize * 0.65);
+            appliedUpdates.subscript = true;
+            appliedUpdates.superscript = false;
+          } else {
+            appliedUpdates.deltaY = 0;
+            appliedUpdates.fontSize = baseSize;
+            appliedUpdates.subscript = false;
+          }
+        }
+
         if (hasSelectionRange) {
           // 1. Partial selection range inside editing mode: Apply styles ONLY to highlighted characters
-          textObj.setSelectionStyles(updates, start, end);
+          textObj.setSelectionStyles(appliedUpdates, start, end);
 
           // If the user highlighted the entire text, also sync object-level defaults
           if (start === 0 && end >= (textObj.text?.length || 0)) {
-            textObj.set(updates);
-            for (const key of Object.keys(updates)) {
+            textObj.set(appliedUpdates);
+            for (const key of Object.keys(appliedUpdates)) {
               clearStylePropertyFromAllChars(textObj, key);
             }
           }
         } else {
           // 2. Whole text box selected (or cursor with no range):
           // Alter the ENTIRE text box all at once by updating the object and purging individual character overrides
-          textObj.set(updates);
+          textObj.set(appliedUpdates);
 
-          for (const key of Object.keys(updates)) {
+          for (const key of Object.keys(appliedUpdates)) {
             clearStylePropertyFromAllChars(textObj, key);
           }
         }

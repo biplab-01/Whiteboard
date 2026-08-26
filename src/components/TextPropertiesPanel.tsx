@@ -193,13 +193,13 @@ export const TextPropertiesPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* Style Toggles (Bold, Italic, Underline, Strikethrough) */}
+      {/* Style Toggles (Bold, Italic, Underline, Strikethrough, Superscript, Subscript) */}
       <div className="mb-4">
         <label className="block text-[11px] font-medium uppercase tracking-wider opacity-70 mb-1.5">
-          Style
+          Style & Formatting
         </label>
         
-        <div className="grid grid-cols-4 gap-1.5">
+        <div className="grid grid-cols-6 gap-1.5">
           {/* Bold */}
           <button 
             type="button"
@@ -254,6 +254,40 @@ export const TextPropertiesPanel: React.FC = () => {
             }`}
           >
             <Strikethrough size={15} />
+          </button>
+
+          {/* Superscript */}
+          <button 
+            type="button"
+            title="Superscript (X²)"
+            onClick={() => handleFormatChange({ 
+              superscript: !activeTextFormat.superscript, 
+              subscript: false 
+            })}
+            className={`p-2 rounded-lg border transition-all flex items-center justify-center text-xs font-serif font-bold ${
+              activeTextFormat.superscript
+                ? (isDarkMode ? 'bg-indigo-600 border-indigo-500 text-white shadow-sm' : 'bg-indigo-100 border-indigo-300 text-indigo-700')
+                : (isDarkMode ? 'bg-gray-800/80 border-gray-700 text-gray-300 hover:bg-gray-700' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100')
+            }`}
+          >
+            <span>X<sup className="text-[10px] font-sans font-bold">2</sup></span>
+          </button>
+
+          {/* Subscript */}
+          <button 
+            type="button"
+            title="Subscript (X₂)"
+            onClick={() => handleFormatChange({ 
+              subscript: !activeTextFormat.subscript, 
+              superscript: false 
+            })}
+            className={`p-2 rounded-lg border transition-all flex items-center justify-center text-xs font-serif font-bold ${
+              activeTextFormat.subscript
+                ? (isDarkMode ? 'bg-indigo-600 border-indigo-500 text-white shadow-sm' : 'bg-indigo-100 border-indigo-300 text-indigo-700')
+                : (isDarkMode ? 'bg-gray-800/80 border-gray-700 text-gray-300 hover:bg-gray-700' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100')
+            }`}
+          >
+            <span>X<sub className="text-[10px] font-sans font-bold">2</sub></span>
           </button>
         </div>
       </div>
