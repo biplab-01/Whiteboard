@@ -87,7 +87,14 @@ export const TextPropertiesPanel: React.FC = () => {
   ];
 
   return (
-    <div className={`fixed top-1/2 right-6 transform -translate-y-1/2 p-4 rounded-2xl shadow-2xl border backdrop-blur-xl w-80 max-h-[88vh] overflow-y-auto custom-scrollbar z-40 transition-all duration-200 ${
+    <div 
+      onMouseDown={(e) => {
+        const target = e.target as HTMLElement;
+        if (target.tagName !== 'INPUT' && target.tagName !== 'SELECT' && target.tagName !== 'TEXTAREA') {
+          e.preventDefault();
+        }
+      }}
+      className={`fixed top-1/2 right-6 transform -translate-y-1/2 p-4 rounded-2xl shadow-2xl border backdrop-blur-xl w-80 max-h-[88vh] overflow-y-auto custom-scrollbar z-40 transition-all duration-200 ${
       isDarkMode 
         ? 'bg-gray-900/90 border-gray-700/80 text-gray-100 shadow-black/50' 
         : 'bg-white/95 border-gray-200/90 text-gray-800 shadow-indigo-500/10'

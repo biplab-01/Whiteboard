@@ -35,6 +35,61 @@ fabric.FabricObject.prototype.perPixelTargetFind = true;
 fabric.Textbox.prototype.lockScalingFlip = true;
 fabric.IText.prototype.lockScalingFlip = true;
 
+// Custom insertChars hook to support seamless superscript and subscript typing
+const origTextboxInsertChars = fabric.Textbox.prototype.insertChars;
+fabric.Textbox.prototype.insertChars = function(chars: string, style?: any, start?: number, end?: number) {
+  const currentFormat = useBoardStore.getState().activeTextFormat;
+  let customStyle = style;
+  if (currentFormat?.superscript) {
+    const baseSize = typeof this.fontSize === 'number' ? this.fontSize : 24;
+    customStyle = {
+      ...(style || {}),
+      deltaY: -Math.round(baseSize * 0.35),
+      fontSize: Math.round(baseSize * 0.65),
+      superscript: true,
+      subscript: false,
+    };
+  } else if (currentFormat?.subscript) {
+    const baseSize = typeof this.fontSize === 'number' ? this.fontSize : 24;
+    customStyle = {
+      ...(style || {}),
+      deltaY: Math.round(baseSize * 0.3),
+      fontSize: Math.round(baseSize * 0.65),
+      subscript: true,
+      superscript: false,
+    };
+  }
+  return (origTextboxInsertChars as any).call(this, chars, customStyle, start, end);
+};
+
+const origITextInsertChars = fabric.IText.prototype.insertChars;
+if (typeof origITextInsertChars === 'function') {
+  fabric.IText.prototype.insertChars = function(chars: string, style?: any, start?: number, end?: number) {
+    const currentFormat = useBoardStore.getState().activeTextFormat;
+    let customStyle = style;
+    if (currentFormat?.superscript) {
+      const baseSize = typeof this.fontSize === 'number' ? this.fontSize : 24;
+      customStyle = {
+        ...(style || {}),
+        deltaY: -Math.round(baseSize * 0.35),
+        fontSize: Math.round(baseSize * 0.65),
+        superscript: true,
+        subscript: false,
+      };
+    } else if (currentFormat?.subscript) {
+      const baseSize = typeof this.fontSize === 'number' ? this.fontSize : 24;
+      customStyle = {
+        ...(style || {}),
+        deltaY: Math.round(baseSize * 0.3),
+        fontSize: Math.round(baseSize * 0.65),
+        subscript: true,
+        superscript: false,
+      };
+    }
+    return (origITextInsertChars as any).call(this, chars, customStyle, start, end);
+  };
+}
+
 // Helper: Normalize Textbox dimensions, scale, and controls to prevent distortion
 const normalizeTextObject = (obj: fabric.FabricObject) => {
   if (obj.type === 'textbox' || obj.type === 'i-text') {
@@ -719,15 +774,26 @@ export const Board: React.FC = () => {
               if (stylesList && stylesList.length > 0) {
                 styles = stylesList[0] || {};
               }
+            } else if (start > 0) {
+              const stylesList = textObj.getSelectionStyles(start - 1, start);
+              if (stylesList && stylesList.length > 0) {
+                styles = stylesList[0] || {};
+              }
             }
           }
 
+          const currentStoreFormat = useBoardStore.getState().activeTextFormat;
           const isSuper = (styles.superscript !== undefined) 
             ? !!styles.superscript 
-            : (typeof styles.deltaY === 'number' && styles.deltaY < 0);
+            : (typeof styles.deltaY === 'number' && styles.deltaY < 0)
+            ? true
+            : (textObj.isEditing && (textObj.selectionStart === textObj.selectionEnd) && currentStoreFormat?.superscript) || false;
+
           const isSub = (styles.subscript !== undefined) 
             ? !!styles.subscript 
-            : (typeof styles.deltaY === 'number' && styles.deltaY > 0);
+            : (typeof styles.deltaY === 'number' && styles.deltaY > 0)
+            ? true
+            : (textObj.isEditing && (textObj.selectionStart === textObj.selectionEnd) && currentStoreFormat?.subscript) || false;
 
           useBoardStore.getState().setActiveShapeFormat(null);
           useBoardStore.getState().setActiveTextFormat({
@@ -928,17 +994,20 @@ export const Board: React.FC = () => {
           // If the user highlighted the entire text, also sync object-level defaults
           if (start === 0 && end >= (textObj.text?.length || 0)) {
             textObj.set(appliedUpdates);
-            for (const key of Object.keys(appliedUpdates)) {
-              clearStylePropertyFromAllChars(textObj, key);
-            }
           }
         } else {
           // 2. Whole text box selected (or cursor with no range):
-          // Alter the ENTIRE text box all at once by updating the object and purging individual character overrides
+          // Alter the ENTIRE text box all at once
           textObj.set(appliedUpdates);
 
-          for (const key of Object.keys(appliedUpdates)) {
-            clearStylePropertyFromAllChars(textObj, key);
+          if (updates.superscript !== undefined || updates.subscript !== undefined) {
+            if (textObj.text && textObj.text.length > 0) {
+              textObj.setSelectionStyles(appliedUpdates, 0, textObj.text.length);
+            }
+          } else {
+            for (const key of Object.keys(appliedUpdates)) {
+              clearStylePropertyFromAllChars(textObj, key);
+            }
           }
         }
 
@@ -961,6 +1030,17 @@ export const Board: React.FC = () => {
         }
         textObj.setCoords();
         canvas.requestRenderAll();
+
+        // Ensure Fabric's hidden textarea remains focused so keyboard input is never blocked
+        if (isEditing && textObj.hiddenTextarea) {
+          setTimeout(() => {
+            if (textObj.isEditing && textObj.hiddenTextarea) {
+              textObj.hiddenTextarea.focus();
+              textObj.selectionStart = start;
+              textObj.selectionEnd = end;
+            }
+          }, 0);
+        }
 
         // If font family was changed, ensure webfont is loaded and canvas re-renders immediately
         if (updates.fontFamily && typeof document !== 'undefined' && document.fonts) {
