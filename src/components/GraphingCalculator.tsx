@@ -1,6 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useBoardStore } from '../store/useBoardStore';
-import { compileExpression2D, compileExpression3D } from '../utils/mathParser';
+import { 
+  compileExpression2D, 
+  compileExpression3D,
+  compileImplicit2D,
+  compileImplicit3D,
+  isImplicitExpression2D,
+  isImplicitExpression3D
+} from '../utils/mathParser';
 import { 
   X, 
   Plus, 
@@ -39,27 +46,34 @@ const COLOR_PALETTE = [
 ];
 
 const PRESETS_2D = [
+  { name: 'Circle (Implicit)', expr: 'x^2 + y^2 = 25' },
+  { name: 'Ellipse (Implicit)', expr: 'x^2/16 + y^2/9 = 1' },
+  { name: 'Hyperbola (Implicit)', expr: 'x^2/4 - y^2/4 = 1' },
+  { name: 'Heart Curve (Implicit)', expr: '(x^2 + y^2 - 4)^3 = x^2 * y^3' },
+  { name: 'Folium of Descartes', expr: 'x^3 + y^3 - 3*x*y = 0' },
+  { name: 'Elliptic Curve (Implicit)', expr: 'y^2 = x^3 - 3*x + 3' },
+  { name: 'Cassini Oval (Implicit)', expr: '(x^2 + y^2)^2 - 4*(x^2 - y^2) = 1' },
+  { name: 'Periodic Grid (Implicit)', expr: 'sin(x) + cos(y) = 0.5' },
   { name: 'Sine Wave', expr: 'sin(x)' },
-  { name: 'Cosine Wave', expr: 'cos(x)' },
-  { name: 'Logarithm', expr: 'log(x)' },
-  { name: 'Natural Log', expr: 'ln(x)' },
   { name: 'Parabola', expr: 'x^2 - 4' },
   { name: 'Cubic', expr: 'x^3 - 3x' },
   { name: 'Gaussian Bell', expr: 'e^(-x^2)' },
-  { name: 'Rational', expr: '1/x' },
-  { name: 'Damped Wave', expr: 'sin(5x) * e^(-x/2)' },
-  { name: 'Heart Shape', expr: 'sqrt(abs(x)) + sqrt(1 - x^2)' }
+  { name: 'Damped Wave', expr: 'sin(5x) * e^(-x/2)' }
 ];
 
 const PRESETS_3D = [
-  { name: 'Ripple Waves', expr: 'sin(sqrt(x^2 + y^2))' },
-  { name: 'Saddle (Hyperbolic)', expr: 'x^2 - y^2' },
-  { name: 'Sombrero / Hat', expr: 'sin(sqrt(x^2+y^2)+0.01)/(sqrt(x^2+y^2)+0.01)' },
-  { name: 'Interference Waves', expr: 'sin(x) * cos(y)' },
-  { name: 'Gaussian Peak', expr: '2 * exp(-(x^2+y^2)/4)' },
-  { name: 'Paraboloid Bowl', expr: '(x^2 + y^2) / 4' },
-  { name: 'Egg Carton', expr: 'sin(x) + sin(y)' },
-  { name: 'Monkey Saddle', expr: 'x^3 - 3*x*y^2' }
+  { name: 'Sphere (Implicit 3D)', expr: 'x^2 + y^2 + z^2 = 9' },
+  { name: 'Torus / Donut (Implicit 3D)', expr: '(x^2 + y^2 + z^2 + 4 - 1)^2 = 16*(x^2 + y^2)' },
+  { name: '3D Heart Surface (Implicit 3D)', expr: '(2*x^2 + y^2 + z^2 - 1)^3 - 0.1*x^2*z^3 - y^2*z^3 = 0' },
+  { name: 'Gyroid Lattice (Implicit 3D)', expr: 'cos(x)*sin(y) + cos(y)*sin(z) + cos(z)*sin(x) = 0' },
+  { name: 'Hyperboloid (Implicit 3D)', expr: 'x^2 + y^2 - z^2 = 1' },
+  { name: 'Double Cone (Implicit 3D)', expr: 'x^2 + y^2 = z^2' },
+  { name: 'Superquadric (Implicit 3D)', expr: 'x^4 + y^4 + z^4 = 16' },
+  { name: 'Goursat Surface (Implicit 3D)', expr: 'x^4 + y^4 + z^4 - 1.5*(x^2 + y^2 + z^2) + 1 = 0' },
+  { name: 'Ripple Waves (Explicit)', expr: 'sin(sqrt(x^2 + y^2))' },
+  { name: 'Saddle Surface (Explicit)', expr: 'x^2 - y^2' },
+  { name: 'Sombrero / Hat (Explicit)', expr: 'sin(sqrt(x^2+y^2)+0.01)/(sqrt(x^2+y^2)+0.01)' },
+  { name: 'Paraboloid Bowl (Explicit)', expr: '(x^2 + y^2) / 4' }
 ];
 
 interface GraphingCalculatorProps {
@@ -273,44 +287,153 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
     equations2D.forEach((eq) => {
       if (!eq.visible || !eq.expr.trim()) return;
 
-      const { fn } = compileExpression2D(eq.expr);
-      ctx.lineWidth = 2.5;
-      ctx.strokeStyle = eq.color;
-      ctx.beginPath();
+      if (isImplicitExpression2D(eq.expr)) {
+        // 2D Implicit Function Plotting using Marching Squares
+        const { fn } = compileImplicit2D(eq.expr);
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = eq.color;
+        ctx.beginPath();
 
-      let isDrawing = false;
-      const pixelStep = 1; // 1px horizontal sampling
+        const gridW = Math.min(240, Math.max(80, Math.round(width / 3.5)));
+        const gridH = Math.min(180, Math.max(60, Math.round(height / 3.5)));
+        const cellW = width / gridW;
+        const cellH = height / gridH;
 
-      for (let px = 0; px <= width; px += pixelStep) {
-        const mathX = (px - originCanvasX) / zoom;
-        const mathY = fn(mathX);
-
-        if (isNaN(mathY) || !isFinite(mathY)) {
-          isDrawing = false;
-          continue;
+        const gridVals: number[][] = [];
+        for (let i = 0; i <= gridW; i++) {
+          gridVals[i] = [];
+          const px = i * cellW;
+          const mathX = (px - originCanvasX) / zoom;
+          for (let j = 0; j <= gridH; j++) {
+            const py = j * cellH;
+            const mathY = (originCanvasY - py) / zoom;
+            const val = fn(mathX, mathY);
+            gridVals[i][j] = isNaN(val) ? 0 : val;
+          }
         }
 
-        const py = originCanvasY - mathY * zoom;
+        const lerp = (p1: number, p2: number, v1: number, v2: number) => {
+          if (Math.abs(v2 - v1) < 1e-7) return (p1 + p2) / 2;
+          return p1 + (-v1 / (v2 - v1)) * (p2 - p1);
+        };
 
-        // Prevent asymptote vertical lines
-        if (py < -height || py > height * 2) {
-          isDrawing = false;
-          continue;
-        }
+        for (let i = 0; i < gridW; i++) {
+          const x0 = i * cellW;
+          const x1 = (i + 1) * cellW;
+          for (let j = 0; j < gridH; j++) {
+            const y0 = j * cellH;
+            const y1 = (j + 1) * cellH;
 
-        if (!isDrawing) {
-          ctx.moveTo(px, py);
-          isDrawing = true;
-        } else {
-          ctx.lineTo(px, py);
+            const v0 = gridVals[i][j];
+            const v1 = gridVals[i + 1][j];
+            const v2 = gridVals[i + 1][j + 1];
+            const v3 = gridVals[i][j + 1];
+
+            let mask = 0;
+            if (v0 > 0) mask |= 1;
+            if (v1 > 0) mask |= 2;
+            if (v2 > 0) mask |= 4;
+            if (v3 > 0) mask |= 8;
+
+            if (mask === 0 || mask === 15) continue;
+
+            const topPt = { x: lerp(x0, x1, v0, v1), y: y0 };
+            const rightPt = { x: x1, y: lerp(y0, y1, v1, v2) };
+            const bottomPt = { x: lerp(x0, x1, v3, v2), y: y1 };
+            const leftPt = { x: x0, y: lerp(y0, y1, v0, v3) };
+
+            switch (mask) {
+              case 1:
+              case 14:
+                ctx.moveTo(leftPt.x, leftPt.y); ctx.lineTo(topPt.x, topPt.y);
+                break;
+              case 2:
+              case 13:
+                ctx.moveTo(topPt.x, topPt.y); ctx.lineTo(rightPt.x, rightPt.y);
+                break;
+              case 3:
+              case 12:
+                ctx.moveTo(leftPt.x, leftPt.y); ctx.lineTo(rightPt.x, rightPt.y);
+                break;
+              case 4:
+              case 11:
+                ctx.moveTo(rightPt.x, rightPt.y); ctx.lineTo(bottomPt.x, bottomPt.y);
+                break;
+              case 5: {
+                const centerVal = (v0 + v1 + v2 + v3) / 4;
+                if (centerVal > 0) {
+                  ctx.moveTo(leftPt.x, leftPt.y); ctx.lineTo(topPt.x, topPt.y);
+                  ctx.moveTo(rightPt.x, rightPt.y); ctx.lineTo(bottomPt.x, bottomPt.y);
+                } else {
+                  ctx.moveTo(leftPt.x, leftPt.y); ctx.lineTo(bottomPt.x, bottomPt.y);
+                  ctx.moveTo(topPt.x, topPt.y); ctx.lineTo(rightPt.x, rightPt.y);
+                }
+                break;
+              }
+              case 6:
+              case 9:
+                ctx.moveTo(topPt.x, topPt.y); ctx.lineTo(bottomPt.x, bottomPt.y);
+                break;
+              case 7:
+              case 8:
+                ctx.moveTo(leftPt.x, leftPt.y); ctx.lineTo(bottomPt.x, bottomPt.y);
+                break;
+              case 10: {
+                const centerVal = (v0 + v1 + v2 + v3) / 4;
+                if (centerVal > 0) {
+                  ctx.moveTo(topPt.x, topPt.y); ctx.lineTo(rightPt.x, rightPt.y);
+                  ctx.moveTo(leftPt.x, leftPt.y); ctx.lineTo(bottomPt.x, bottomPt.y);
+                } else {
+                  ctx.moveTo(topPt.x, topPt.y); ctx.lineTo(leftPt.x, leftPt.y);
+                  ctx.moveTo(rightPt.x, rightPt.y); ctx.lineTo(bottomPt.x, bottomPt.y);
+                }
+                break;
+              }
+            }
+          }
         }
+        ctx.stroke();
+      } else {
+        // Explicit 2D Curve
+        const { fn } = compileExpression2D(eq.expr);
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = eq.color;
+        ctx.beginPath();
+
+        let isDrawing = false;
+        const pixelStep = 1; // 1px horizontal sampling
+
+        for (let px = 0; px <= width; px += pixelStep) {
+          const mathX = (px - originCanvasX) / zoom;
+          const mathY = fn(mathX);
+
+          if (isNaN(mathY) || !isFinite(mathY)) {
+            isDrawing = false;
+            continue;
+          }
+
+          const py = originCanvasY - mathY * zoom;
+
+          // Prevent asymptote vertical lines
+          if (py < -height || py > height * 2) {
+            isDrawing = false;
+            continue;
+          }
+
+          if (!isDrawing) {
+            ctx.moveTo(px, py);
+            isDrawing = true;
+          } else {
+            ctx.lineTo(px, py);
+          }
+        }
+        ctx.stroke();
       }
-      ctx.stroke();
     });
   }, [view2D, equations2D, isDarkMode]);
 
   // -------------------------------------------------------------
-  // RENDER 3D SURFACE
+  // RENDER 3D SURFACE (EXPLICIT & IMPLICIT)
   // -------------------------------------------------------------
   const draw3DGraph = useCallback((ctx: CanvasRenderingContext2D, width: number, height: number, customBg?: 'transparent' | 'dark' | 'light') => {
     ctx.clearRect(0, 0, width, height);
@@ -324,6 +447,345 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
     }
 
     const { rotX, rotZ, zoom, xMin, xMax, yMin, yMax, resolution, wireframe, colorScheme } = view3D;
+
+    // Color gradient function
+    const getColor = (t: number, lightFactor: number = 1) => {
+      const clampT = Math.max(0, Math.min(1, t));
+      let r = 0, g = 0, b = 0;
+
+      if (colorScheme === 'rainbow') {
+        const hue = (1 - clampT) * 240;
+        const h = hue / 360;
+        const s = 0.85;
+        const l = Math.min(0.75, 0.45 * lightFactor);
+        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        const p = 2 * l - q;
+        const hue2rgb = (tVal: number) => {
+          let tNorm = tVal;
+          if (tNorm < 0) tNorm += 1;
+          if (tNorm > 1) tNorm -= 1;
+          if (tNorm < 1/6) return p + (q - p) * 6 * tNorm;
+          if (tNorm < 1/2) return q;
+          if (tNorm < 2/3) return p + (q - p) * (2/3 - tNorm) * 6;
+          return p;
+        };
+        r = Math.round(hue2rgb(h + 1/3) * 255);
+        g = Math.round(hue2rgb(h) * 255);
+        b = Math.round(hue2rgb(h - 1/3) * 255);
+      } else if (colorScheme === 'neon') {
+        r = Math.round((0.2 + 0.8 * clampT) * 255 * lightFactor);
+        g = Math.round((0.1 + 0.6 * (1 - clampT)) * 255 * lightFactor);
+        b = Math.round((0.9 - 0.5 * clampT) * 255 * lightFactor);
+      } else if (colorScheme === 'ocean') {
+        r = Math.round((0.1 + 0.8 * clampT) * 255 * lightFactor);
+        g = Math.round((0.4 + 0.5 * clampT) * 255 * lightFactor);
+        b = Math.round((0.9 + 0.1 * clampT) * 255 * lightFactor);
+      } else {
+        r = Math.round((0.1 + 0.9 * clampT) * 255 * lightFactor);
+        g = Math.round((0.7 + 0.2 * clampT) * 255 * lightFactor);
+        b = Math.round((0.3 * (1 - clampT)) * 255 * lightFactor);
+      }
+
+      r = Math.max(0, Math.min(255, r));
+      g = Math.max(0, Math.min(255, g));
+      b = Math.max(0, Math.min(255, b));
+
+      return { r, g, b, str: `rgb(${r}, ${g}, ${b})` };
+    };
+
+    // -----------------------------------------------------------
+    // IMPLICIT 3D ISOSURFACE RAYMARCHING
+    // -----------------------------------------------------------
+    if (isImplicitExpression3D(expr3D)) {
+      const { fn: implicitFn } = compileImplicit3D(expr3D);
+      const L = 4.0;
+      const radX = (rotX * Math.PI) / 180;
+      const radZ = (rotZ * Math.PI) / 180;
+      const cosX = Math.cos(radX), sinX = Math.sin(radX);
+      const cosZ = Math.cos(radZ), sinZ = Math.sin(radZ);
+
+      const dist = 12.0;
+      const camX = dist * sinZ * cosX;
+      const camY = dist * cosZ * cosX;
+      const camZ = dist * sinX;
+
+      const fLen = Math.hypot(camX, camY, camZ) || 1;
+      const fwX = -camX / fLen;
+      const fwY = -camY / fLen;
+      const fwZ = -camZ / fLen;
+
+      const worldUpX = 0, worldUpY = 0, worldUpZ = 1;
+      let rx = fwY * worldUpZ - fwZ * worldUpY;
+      let ry = fwZ * worldUpX - fwX * worldUpZ;
+      let rz = fwX * worldUpY - fwY * worldUpX;
+      const rLen = Math.hypot(rx, ry, rz) || 1;
+      rx /= rLen; ry /= rLen; rz /= rLen;
+
+      const upX = ry * fwZ - rz * fwY;
+      const upY = rz * fwX - rx * fwZ;
+      const upZ = rx * fwY - ry * fwX;
+
+      const project = (x: number, y: number, z: number) => {
+        const x1 = x * cosZ - y * sinZ;
+        const y1 = x * sinZ + y * cosZ;
+        const z1 = z;
+        const x2 = x1;
+        const y2 = y1 * cosX - z1 * sinX;
+        const z2 = y1 * sinX + z1 * cosX;
+        const screenX = width / 2 + x2 * zoom;
+        const screenY = height / 2 - z2 * zoom;
+        return { x: screenX, y: screenY, depth: y2 };
+      };
+
+      if (!wireframe) {
+        const imgData = ctx.createImageData(width, height);
+        const data = imgData.data;
+
+        const bgR = isDark ? 15 : 255;
+        const bgG = isDark ? 23 : 255;
+        const bgB = isDark ? 42 : 255;
+        const bgA = customBg === 'transparent' ? 0 : 255;
+
+        if (bgA > 0) {
+          for (let i = 0; i < data.length; i += 4) {
+            data[i] = bgR;
+            data[i + 1] = bgG;
+            data[i + 2] = bgB;
+            data[i + 3] = bgA;
+          }
+        }
+
+        const step = 2; // 2px block rendering for real-time 60fps interaction
+        const scaleFactor = (zoom * 10);
+        const lx = 0.577, ly = -0.577, lz = 0.577;
+
+        for (let py = 0; py < height; py += step) {
+          const ny = (height / 2 - py) / scaleFactor;
+          for (let px = 0; px < width; px += step) {
+            const nx = (px - width / 2) / scaleFactor;
+
+            const ox = camX + nx * rx + ny * upX;
+            const oy = camY + nx * ry + ny * upY;
+            const oz = camZ + nx * rz + ny * upZ;
+
+            const dx = fwX;
+            const dy = fwY;
+            const dz = fwZ;
+
+            let prevVal = NaN;
+            let hit = false;
+            let hitT = 0;
+
+            const tStart = dist - L * 1.8;
+            const tEnd = dist + L * 1.8;
+            const raySteps = 42;
+            const rayDt = (tEnd - tStart) / raySteps;
+
+            for (let s = 0; s <= raySteps; s++) {
+              const t = tStart + s * rayDt;
+              const curX = ox + t * dx;
+              const curY = oy + t * dy;
+              const curZ = oz + t * dz;
+
+              if (Math.abs(curX) > L * 1.3 || Math.abs(curY) > L * 1.3 || Math.abs(curZ) > L * 1.3) {
+                prevVal = NaN;
+                continue;
+              }
+
+              const val = implicitFn(curX, curY, curZ);
+              if (isNaN(val) || !isFinite(val)) {
+                prevVal = NaN;
+                continue;
+              }
+
+              if (!isNaN(prevVal) && prevVal * val <= 0) {
+                let tA = t - rayDt;
+                let tB = t;
+                let vA = prevVal;
+                let vB = val;
+                for (let iter = 0; iter < 4; iter++) {
+                  const tMid = Math.abs(vB - vA) > 1e-7 ? (tA * vB - tB * vA) / (vB - vA) : (tA + tB) / 2;
+                  const vMid = implicitFn(ox + tMid * dx, oy + tMid * dy, oz + tMid * dz);
+                  if (isNaN(vMid)) break;
+                  if (vA * vMid <= 0) {
+                    tB = tMid;
+                    vB = vMid;
+                  } else {
+                    tA = tMid;
+                    vA = vMid;
+                  }
+                }
+                hitT = (tA + tB) / 2;
+                hit = true;
+                break;
+              }
+              prevVal = val;
+            }
+
+            if (hit) {
+              const hx = ox + hitT * dx;
+              const hy = oy + hitT * dy;
+              const hz = oz + hitT * dz;
+
+              const eps = 0.005;
+              const nxGrad = (implicitFn(hx + eps, hy, hz) - implicitFn(hx - eps, hy, hz)) / (2 * eps);
+              const nyGrad = (implicitFn(hx, hy + eps, hz) - implicitFn(hx, hy - eps, hz)) / (2 * eps);
+              const nzGrad = (implicitFn(hx, hy, hz + eps) - implicitFn(hx, hy, hz - eps)) / (2 * eps);
+              const nLen = Math.hypot(nxGrad, nyGrad, nzGrad) || 1;
+              let normX = nxGrad / nLen;
+              let normY = nyGrad / nLen;
+              let normZ = nzGrad / nLen;
+
+              if (normX * dx + normY * dy + normZ * dz > 0) {
+                normX = -normX;
+                normY = -normY;
+                normZ = -normZ;
+              }
+
+              const dotL = Math.max(0, normX * lx + normY * ly + normZ * lz);
+              const rfx = 2 * dotL * normX - lx;
+              const rfy = 2 * dotL * normY - ly;
+              const rfz = 2 * dotL * normZ - lz;
+              const dotV = Math.max(0, -(rfx * dx + rfy * dy + rfz * dz));
+              const spec = Math.pow(dotV, 12) * 0.45;
+              const lightFactor = Math.min(1.4, Math.max(0.4, 0.35 + dotL * 0.75 + spec));
+
+              const normH = Math.max(0, Math.min(1, (hz + L * 0.8) / (L * 1.6)));
+              const col = getColor(normH, lightFactor);
+
+              for (let sy = 0; sy < step && py + sy < height; sy++) {
+                for (let sx = 0; sx < step && px + sx < width; sx++) {
+                  const idx = ((py + sy) * width + (px + sx)) * 4;
+                  data[idx] = col.r;
+                  data[idx + 1] = col.g;
+                  data[idx + 2] = col.b;
+                  data[idx + 3] = 255;
+                }
+              }
+            }
+          }
+        }
+        ctx.putImageData(imgData, 0, 0);
+      } else {
+        // Wireframe Slice Contours on 3D Implicit Volume
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = '#6366f1';
+        const slices = 16;
+        const zStep = (2 * L) / slices;
+        for (let s = 0; s <= slices; s++) {
+          const sliceZ = -L + s * zStep;
+          const gridRes = 30;
+          const stepXY = (2 * L) / gridRes;
+          const sliceVals: number[][] = [];
+          for (let i = 0; i <= gridRes; i++) {
+            sliceVals[i] = [];
+            const x = -L + i * stepXY;
+            for (let j = 0; j <= gridRes; j++) {
+              const y = -L + j * stepXY;
+              sliceVals[i][j] = implicitFn(x, y, sliceZ);
+            }
+          }
+          for (let i = 0; i < gridRes; i++) {
+            for (let j = 0; j < gridRes; j++) {
+              const v0 = sliceVals[i][j];
+              const v1 = sliceVals[i + 1][j];
+              const v2 = sliceVals[i + 1][j + 1];
+              const v3 = sliceVals[i][j + 1];
+              let mask = 0;
+              if (v0 > 0) mask |= 1;
+              if (v1 > 0) mask |= 2;
+              if (v2 > 0) mask |= 4;
+              if (v3 > 0) mask |= 8;
+              if (mask === 0 || mask === 15) continue;
+              const xA = -L + i * stepXY;
+              const xB = xA + stepXY;
+              const yA = -L + j * stepXY;
+              const yB = yA + stepXY;
+              const lerp3 = (p1: number, p2: number, va: number, vb: number) => p1 + (-va / (vb - va || 1e-6)) * (p2 - p1);
+              const pTop = project(lerp3(xA, xB, v0, v1), yA, sliceZ);
+              const pRight = project(xB, lerp3(yA, yB, v1, v2), sliceZ);
+              const pBottom = project(lerp3(xA, xB, v3, v2), yB, sliceZ);
+              const pLeft = project(xA, lerp3(yA, yB, v0, v3), sliceZ);
+
+              ctx.beginPath();
+              switch (mask) {
+                case 1:
+                case 14:
+                  ctx.moveTo(pLeft.x, pLeft.y); ctx.lineTo(pTop.x, pTop.y);
+                  break;
+                case 2:
+                case 13:
+                  ctx.moveTo(pTop.x, pTop.y); ctx.lineTo(pRight.x, pRight.y);
+                  break;
+                case 3:
+                case 12:
+                  ctx.moveTo(pLeft.x, pLeft.y); ctx.lineTo(pRight.x, pRight.y);
+                  break;
+                case 4:
+                case 11:
+                  ctx.moveTo(pRight.x, pRight.y); ctx.lineTo(pBottom.x, pBottom.y);
+                  break;
+                case 6:
+                case 9:
+                  ctx.moveTo(pTop.x, pTop.y); ctx.lineTo(pBottom.x, pBottom.y);
+                  break;
+                case 7:
+                case 8:
+                  ctx.moveTo(pLeft.x, pLeft.y); ctx.lineTo(pBottom.x, pBottom.y);
+                  break;
+                default:
+                  ctx.moveTo(pLeft.x, pLeft.y); ctx.lineTo(pRight.x, pRight.y);
+                  break;
+              }
+              ctx.stroke();
+            }
+          }
+        }
+      }
+
+      // Draw Coordinate Axes Base Box
+      ctx.lineWidth = 2;
+      const o = project(0, 0, 0);
+      const axX = project(L * 0.8, 0, 0);
+      const axY = project(0, L * 0.8, 0);
+      const axZ = project(0, 0, L * 0.8);
+
+      // X Axis (Red)
+      ctx.strokeStyle = '#ef4444';
+      ctx.beginPath();
+      ctx.moveTo(o.x, o.y);
+      ctx.lineTo(axX.x, axX.y);
+      ctx.stroke();
+
+      // Y Axis (Green)
+      ctx.strokeStyle = '#10b981';
+      ctx.beginPath();
+      ctx.moveTo(o.x, o.y);
+      ctx.lineTo(axY.x, axY.y);
+      ctx.stroke();
+
+      // Z Axis (Blue)
+      ctx.strokeStyle = '#38bdf8';
+      ctx.beginPath();
+      ctx.moveTo(o.x, o.y);
+      ctx.lineTo(axZ.x, axZ.y);
+      ctx.stroke();
+
+      // Draw Axis Labels
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillStyle = '#ef4444';
+      ctx.fillText('X', axX.x + 6, axX.y);
+      ctx.fillStyle = '#10b981';
+      ctx.fillText('Y', axY.x + 6, axY.y);
+      ctx.fillStyle = '#38bdf8';
+      ctx.fillText('Z', axZ.x + 6, axZ.y);
+
+      return;
+    }
+
+    // -----------------------------------------------------------
+    // EXPLICIT 3D SURFACE QUAD MESH
+    // -----------------------------------------------------------
     const { fn } = compileExpression3D(expr3D);
 
     const radX = (rotX * Math.PI) / 180;
@@ -333,19 +795,16 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
 
     // 3D Point Projection Helper
     const project = (x: number, y: number, z: number) => {
-      // Rotate around Z axis (yaw)
       const x1 = x * cosZ - y * sinZ;
       const y1 = x * sinZ + y * cosZ;
       const z1 = z;
 
-      // Rotate around X axis (pitch)
       const x2 = x1;
       const y2 = y1 * cosX - z1 * sinX;
       const z2 = y1 * sinX + z1 * cosX;
 
-      // Center on canvas
       const screenX = width / 2 + x2 * zoom;
-      const screenY = height / 2 - z2 * zoom; // Invert Z for screen coords
+      const screenY = height / 2 - z2 * zoom;
 
       return { x: screenX, y: screenY, depth: y2 };
     };
@@ -365,7 +824,7 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
         const y = yMin + j * stepY;
         let z = fn(x, y);
         if (isNaN(z) || !isFinite(z)) z = 0;
-        z = Math.max(-10, Math.min(10, z)); // Clamp extreme spikes
+        z = Math.max(-10, Math.min(10, z));
         gridZ[i][j] = z;
         if (z < minZ) minZ = z;
         if (z > maxZ) maxZ = z;
@@ -374,36 +833,6 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
 
     if (minZ === maxZ) maxZ = minZ + 1;
 
-    // Color gradient function based on normalized height t in [0, 1]
-    const getColor = (t: number, lightFactor: number = 1) => {
-      const clampT = Math.max(0, Math.min(1, t));
-      let r = 0, g = 0, b = 0;
-
-      if (colorScheme === 'rainbow') {
-        // Blue -> Cyan -> Green -> Yellow -> Red
-        const hue = (1 - clampT) * 240; // 240 (blue) to 0 (red)
-        return `hsl(${hue}, 85%, ${Math.min(75, 45 * lightFactor)}%)`;
-      } else if (colorScheme === 'neon') {
-        // Deep purple to neon cyan/coral
-        r = Math.round((0.2 + 0.8 * clampT) * 255 * lightFactor);
-        g = Math.round((0.1 + 0.6 * (1 - clampT)) * 255 * lightFactor);
-        b = Math.round((0.9 - 0.5 * clampT) * 255 * lightFactor);
-      } else if (colorScheme === 'ocean') {
-        // Deep navy to bright cyan to white
-        r = Math.round((0.1 + 0.8 * clampT) * 255 * lightFactor);
-        g = Math.round((0.4 + 0.5 * clampT) * 255 * lightFactor);
-        b = Math.round((0.9 + 0.1 * clampT) * 255 * lightFactor);
-      } else {
-        // Emerald to gold
-        r = Math.round((0.1 + 0.9 * clampT) * 255 * lightFactor);
-        g = Math.round((0.7 + 0.2 * clampT) * 255 * lightFactor);
-        b = Math.round((0.3 * (1 - clampT)) * 255 * lightFactor);
-      }
-
-      return `rgb(${Math.min(255, r)}, ${Math.min(255, g)}, ${Math.min(255, b)})`;
-    };
-
-    // Generate Quads and sort by depth for painter's algorithm
     interface Quad {
       p1: { x: number; y: number; depth: number };
       p2: { x: number; y: number; depth: number };
@@ -433,14 +862,12 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
         const p3 = project(x2, y2, z22);
         const p4 = project(x1, y2, z12);
 
-        // Approximate normal vector for simple directional lighting
         const dzx = (z21 - z11) / stepX;
         const dzy = (z12 - z11) / stepY;
         const nx = -dzx;
         const ny = -dzy;
         const nz = 1;
         const len = Math.hypot(nx, ny, nz);
-        // Light from (0.5, -0.5, 1)
         const dot = (nx * 0.4 - ny * 0.4 + nz * 0.8) / (len || 1);
         const light = Math.max(0.6, Math.min(1.3, 0.9 + dot * 0.4));
 
@@ -451,7 +878,6 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
       }
     }
 
-    // Sort quads from furthest to nearest
     quads.sort((a, b) => a.avgDepth - b.avgDepth);
 
     // Draw Coordinate Axes Base Box
@@ -496,7 +922,8 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
     // Render Quads
     quads.forEach((q) => {
       const normZ = (q.avgZ - minZ) / (maxZ - minZ || 1);
-      ctx.fillStyle = getColor(normZ, q.light);
+      const col = getColor(normZ, q.light);
+      ctx.fillStyle = col.str;
       ctx.strokeStyle = isDark ? 'rgba(0, 0, 0, 0.3)' : 'rgba(255, 255, 255, 0.4)';
       ctx.lineWidth = 0.6;
 
@@ -638,7 +1065,7 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
               {activeTab === '2d' ? (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold uppercase tracking-wider text-gray-400">Functions (y = f(x))</span>
+                    <span className="text-xs font-bold uppercase tracking-wider text-gray-400">2D Equations (Explicit & Implicit)</span>
                     <button
                       onClick={handleAddEquation}
                       className="px-2 py-1 rounded-lg bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-600/30 text-xs font-medium flex items-center gap-1 transition-colors"
@@ -650,7 +1077,8 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
                   <div className="space-y-2 max-h-48 overflow-y-auto pr-1 custom-scrollbar">
                     {equations2D.map((eq, index) => {
                       const isActive = activeEqIndex === index;
-                      const { error } = compileExpression2D(eq.expr);
+                      const isImplicit = isImplicitExpression2D(eq.expr);
+                      const { error } = isImplicit ? compileImplicit2D(eq.expr) : compileExpression2D(eq.expr);
 
                       return (
                         <div
@@ -675,7 +1103,9 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
                               title="Change Color"
                             />
 
-                            <span className="font-serif italic font-bold text-xs text-indigo-400">y =</span>
+                            <span className="font-serif italic font-bold text-xs text-indigo-400 shrink-0">
+                              {isImplicit ? 'F(x,y)' : 'y ='}
+                            </span>
 
                             <input
                               type="text"
@@ -684,7 +1114,7 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
                                 const val = e.target.value;
                                 setEquations2D(prev => prev.map((item, i) => i === index ? { ...item, expr: val } : item));
                               }}
-                              placeholder="e.g. sin(x) or x^2"
+                              placeholder="e.g. sin(x) or x^2 + y^2 = 25"
                               className="flex-1 bg-transparent text-xs font-mono focus:outline-none text-white"
                             />
 
@@ -750,17 +1180,28 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
                 /* 3D Mode Equation & Controls */
                 <div className="space-y-3">
                   <div>
-                    <span className="text-xs font-bold uppercase tracking-wider text-gray-400 block mb-2">Surface Equation (z = f(x, y))</span>
+                    <span className="text-xs font-bold uppercase tracking-wider text-gray-400 block mb-2">
+                      Surface Equation (Explicit or Implicit 3D)
+                    </span>
                     <div className="p-3 rounded-xl border border-indigo-500/50 bg-indigo-500/10 flex items-center gap-2">
-                      <span className="font-serif italic font-bold text-sm text-indigo-400">z =</span>
+                      <span className="font-serif italic font-bold text-sm text-indigo-400 shrink-0">
+                        {isImplicitExpression3D(expr3D) ? 'F(x,y,z)' : 'z ='}
+                      </span>
                       <input
                         type="text"
                         value={expr3D}
                         onChange={(e) => setExpr3D(e.target.value)}
-                        placeholder="e.g. sin(sqrt(x^2 + y^2))"
+                        placeholder="e.g. sin(sqrt(x^2+y^2)) or x^2+y^2+z^2=9"
                         className="flex-1 bg-transparent text-sm font-mono focus:outline-none text-white"
                       />
                     </div>
+                    {(() => {
+                      const isImp = isImplicitExpression3D(expr3D);
+                      const { error } = isImp ? compileImplicit3D(expr3D) : compileExpression3D(expr3D);
+                      return error && expr3D.trim() ? (
+                        <p className="text-[10px] text-red-400 mt-1">⚠️ {error}</p>
+                      ) : null;
+                    })()}
                   </div>
 
                   {/* 3D Presets */}
@@ -840,8 +1281,8 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
               {/* Math Virtual Keypad */}
               <div className="pt-3 border-t border-gray-200/20">
                 <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider block mb-1.5">Quick Math Keypad</span>
-                <div className="grid grid-cols-5 gap-1.5">
-                  {['sin', 'cos', 'tan', 'log', 'ln', 'sqrt', '^', 'pi', 'e', 'abs', 'x', 'y', '(', ')', '+', '-', '*', '/', '0', '1'].map(token => (
+                <div className="grid grid-cols-6 gap-1.5">
+                  {['sin', 'cos', 'tan', 'log', 'ln', 'sqrt', '^', 'pi', 'e', 'abs', 'x', 'y', 'z', '=', '(', ')', '+', '-', '*', '/', '0', '1', '2', '3'].map(token => (
                     <button
                       key={token}
                       onClick={() => insertToken(
