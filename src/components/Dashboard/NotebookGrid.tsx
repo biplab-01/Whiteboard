@@ -10,7 +10,7 @@ interface NotebookGridProps {
 }
 
 export const NotebookGrid = ({ currentView, searchQuery, onOpenImportModal }: NotebookGridProps) => {
-  const { notebooks, folders, createNotebook, isDarkMode, openNotebook, isSyncing, syncStatusText, syncAllNotebooks } = useBoardStore();
+  const { notebooks, folders, createNotebook, isDarkMode, openNotebook, isSyncing, syncStatusText, syncProgress, syncAllNotebooks } = useBoardStore();
   const { user, setShowAuthModal } = useAuthStore();
 
   const isAuth = user?.id && !user.is_anonymous;
@@ -60,7 +60,7 @@ export const NotebookGrid = ({ currentView, searchQuery, onOpenImportModal }: No
                 setShowAuthModal(true);
               }
             }}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs font-semibold transition-all shadow-sm hover:scale-[1.02] active:scale-[0.98] cursor-pointer ${
+            className={`relative overflow-hidden flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs font-semibold transition-all shadow-sm hover:scale-[1.02] active:scale-[0.98] cursor-pointer ${
               isSyncing
                 ? 'border-teal-500/50 bg-teal-500/15 text-teal-300'
                 : syncStatusText
@@ -75,27 +75,35 @@ export const NotebookGrid = ({ currentView, searchQuery, onOpenImportModal }: No
             }`}
             title={isAuth ? 'Fetch and synchronize all notebooks and drawings from Supabase' : 'Sign in to enable multi-device sync'}
           >
-            {isSyncing ? (
-              <>
-                <RefreshCw size={14} className="animate-spin text-teal-400" />
-                <span>{syncStatusText || 'Syncing all notebooks...'}</span>
-              </>
-            ) : syncStatusText ? (
-              <>
-                <Check size={14} className="text-emerald-400" />
-                <span>{syncStatusText}</span>
-              </>
-            ) : isAuth ? (
-              <>
-                <Cloud size={14} className="text-indigo-400" />
-                <span>Sync All Notebooks</span>
-              </>
-            ) : (
-              <>
-                <CloudOff size={14} className="text-amber-400" />
-                <span>Local Only • Sign in to Sync</span>
-              </>
+            {isSyncing && (
+              <div 
+                className="absolute left-0 top-0 bottom-0 bg-teal-500/25 transition-all duration-200 ease-out pointer-events-none" 
+                style={{ width: `${Math.max(5, syncProgress)}%` }} 
+              />
             )}
+            <div className="relative z-10 flex items-center gap-2">
+              {isSyncing ? (
+                <>
+                  <RefreshCw size={14} className="animate-spin text-teal-400" />
+                  <span>{syncStatusText || `Syncing ${syncProgress}%...`}</span>
+                </>
+              ) : syncStatusText ? (
+                <>
+                  <Check size={14} className="text-emerald-400" />
+                  <span>{syncStatusText}</span>
+                </>
+              ) : isAuth ? (
+                <>
+                  <Cloud size={14} className="text-indigo-400" />
+                  <span>Sync All Notebooks</span>
+                </>
+              ) : (
+                <>
+                  <CloudOff size={14} className="text-amber-400" />
+                  <span>Local Only • Sign in to Sync</span>
+                </>
+              )}
+            </div>
           </button>
         </div>
       </div>

@@ -130,12 +130,27 @@ export const Sidebar = ({ currentView, setCurrentView }: SidebarProps) => {
       }`}>
         <div className="flex items-center justify-between mb-1.5">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Cloud Sync</span>
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span className={`w-2 h-2 rounded-full ${useBoardStore.getState().isSyncing ? 'bg-teal-400 animate-spin' : 'bg-emerald-400 animate-pulse'}`} />
         </div>
         <p className="text-[11px] opacity-60 mb-2.5 leading-relaxed">
-          {user?.id && !user.is_anonymous ? 'All notebooks synchronized across devices.' : 'Using local storage. Sign in to sync.'}
+          {useBoardStore.getState().isSyncing
+            ? useBoardStore.getState().syncStatusText || `Syncing ${useBoardStore.getState().syncProgress}%...`
+            : user?.id && !user.is_anonymous
+            ? 'All notebooks synchronized across devices.'
+            : 'Using local storage. Sign in to sync.'}
         </p>
+
+        {useBoardStore.getState().isSyncing && (
+          <div className="w-full bg-gray-700/40 rounded-full h-1.5 mb-2.5 overflow-hidden">
+            <div 
+              className="bg-teal-400 h-full rounded-full transition-all duration-200" 
+              style={{ width: `${Math.max(5, useBoardStore.getState().syncProgress)}%` }} 
+            />
+          </div>
+        )}
+
         <button
+          disabled={useBoardStore.getState().isSyncing}
           onClick={() => {
             if (user?.id && !user.is_anonymous) {
               useBoardStore.getState().syncAllNotebooks(user.id);
@@ -144,12 +159,18 @@ export const Sidebar = ({ currentView, setCurrentView }: SidebarProps) => {
             }
           }}
           className={`w-full py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm ${
-            user?.id && !user.is_anonymous
+            useBoardStore.getState().isSyncing
+              ? 'bg-teal-600/50 text-teal-200 cursor-not-allowed'
+              : user?.id && !user.is_anonymous
               ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
               : 'bg-amber-600 hover:bg-amber-500 text-white'
           }`}
         >
-          {user?.id && !user.is_anonymous ? 'Sync Library Now' : 'Sign in to Sync'}
+          {useBoardStore.getState().isSyncing 
+            ? `${useBoardStore.getState().syncProgress}% Syncing...`
+            : user?.id && !user.is_anonymous 
+            ? 'Sync Library Now' 
+            : 'Sign in to Sync'}
         </button>
       </div>
 

@@ -9,7 +9,7 @@ interface SyncStatusBadgeProps {
 }
 
 export const SyncStatusBadge: React.FC<SyncStatusBadgeProps> = ({ variant = 'full', className = '' }) => {
-  const { isSyncing, syncStatusText, activeUserId, syncAllNotebooks, isDarkMode } = useBoardStore();
+  const { isSyncing, syncStatusText, syncProgress, activeUserId, syncAllNotebooks, isDarkMode } = useBoardStore();
   const { user, setShowAuthModal } = useAuthStore();
 
   const isAuth = user?.id && isValidUUID(user.id) && !user.is_anonymous;
@@ -50,15 +50,22 @@ export const SyncStatusBadge: React.FC<SyncStatusBadgeProps> = ({ variant = 'ful
   if (isSyncing) {
     return (
       <div
-        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-medium transition-all shadow-sm ${
+        className={`relative overflow-hidden flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-medium transition-all shadow-sm ${
           isDarkMode
             ? 'bg-teal-500/15 border-teal-500/40 text-teal-300'
             : 'bg-teal-50 border-teal-200 text-teal-700'
         } ${className}`}
         title="Syncing changes with Supabase cloud..."
       >
-        <RefreshCw size={13} className="animate-spin text-teal-400 shrink-0" />
-        <span>{syncStatusText || 'Syncing...'}</span>
+        {/* Animated Progress Bar underlay */}
+        <div 
+          className="absolute left-0 top-0 bottom-0 bg-teal-500/25 transition-all duration-200 ease-out" 
+          style={{ width: `${Math.max(5, syncProgress)}%` }} 
+        />
+        <div className="relative z-10 flex items-center gap-1.5 w-full">
+          <RefreshCw size={13} className="animate-spin text-teal-400 shrink-0" />
+          <span className="truncate">{syncStatusText || `Syncing ${syncProgress}%...`}</span>
+        </div>
       </div>
     );
   }

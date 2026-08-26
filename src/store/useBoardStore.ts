@@ -152,6 +152,7 @@ export interface BoardState {
   loading: boolean;
   isSyncing: boolean;
   syncStatusText: string | null;
+  syncProgress: number;
 
   // Library Actions
   fetchLibrary: (userId: string) => Promise<void>;
@@ -176,7 +177,7 @@ export interface BoardState {
   currentPageId: string | null;
   addPage: (userId: string) => Promise<void>;
   removePage: (id: string) => Promise<void>;
-  switchPage: (id: string, currentCanvasData?: string) => Promise<void>;
+  switchPage: (id: string) => Promise<void>;
   updatePageData: (id: string, canvasData: string) => Promise<void>;
   importPdfPages: (pdfPages: { canvasData: string; name: string }[], afterPageId: string | null, userId: string) => Promise<void>;
 
@@ -261,6 +262,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   loading: false,
   isSyncing: false,
   syncStatusText: null,
+  syncProgress: 0,
 
   bgType: DEFAULT_BG_SETTINGS.bgType,
   bgColor: DEFAULT_BG_SETTINGS.bgColor,
@@ -270,7 +272,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   pageOrientation: DEFAULT_BG_SETTINGS.pageOrientation || 'portrait',
 
   fetchLibrary: async (userId: string) => {
-    set({ activeUserId: userId, isSyncing: false, syncStatusText: null });
+    set({ activeUserId: userId, isSyncing: false, syncStatusText: null, syncProgress: 0 });
 
     const foldersKey = getUserStorageKey(userId, STORAGE_KEYS.FOLDERS);
     const notebooksKey = getUserStorageKey(userId, STORAGE_KEYS.NOTEBOOKS);
@@ -283,10 +285,10 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
   syncAllNotebooks: async (userId: string) => {
     const isAuthUser = isValidUUID(userId);
-    set({ isSyncing: true, syncStatusText: 'Syncing all notebooks...' });
+    set({ isSyncing: true, syncProgress: 5, syncStatusText: 'Starting sync (5%)...' });
 
     if (!isAuthUser) {
-      set({ isSyncing: false, syncStatusText: 'Local storage (Sign in to sync)' });
+      set({ isSyncing: false, syncProgress: 0, syncStatusText: 'Local storage (Sign in to sync)' });
       setTimeout(() => set({ syncStatusText: null }), 3000);
       return;
     }
@@ -299,6 +301,10 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const localFolders = (await getIdbItem<FolderRow[]>(foldersKey, [])) || [];
       const localNotebooks = (await getIdbItem<NotebookRow[]>(notebooksKey, [])) || [];
       const localPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
+      const validPages = localPages.filter((p) => p.notebook_id && isValidUUID(p.notebook_id));
+
+      const totalUnits = Math.max(1, localFolders.length + localNotebooks.length + validPages.length + 4);
+      let doneUnits = 0;
 
       // 1. Push local folders to Supabase
       for (const f of localFolders) {
@@ -308,6 +314,9 @@ export const useBoardStore = create<BoardState>((set, get) => ({
           user_id: userId,
           created_at: f.created_at || new Date().toISOString(),
         });
+        doneUnits++;
+        const pct = Math.min(99, Math.round((doneUnits / totalUnits) * 100));
+        set({ syncProgress: pct, syncStatusText: `Syncing folders (${pct}%)...` });
       }
 
       // 2. Push local notebooks to Supabase
@@ -320,13 +329,17 @@ export const useBoardStore = create<BoardState>((set, get) => ({
           created_at: nb.created_at || new Date().toISOString(),
           updated_at: nb.updated_at || new Date().toISOString(),
         });
+        doneUnits++;
+        const pct = Math.min(99, Math.round((doneUnits / totalUnits) * 100));
+        set({ syncProgress: pct, syncStatusText: `Syncing notebooks (${pct}%)...` });
       }
 
-      // 3. Push local pages to Supabase
-      const validPages = localPages.filter((p) => p.notebook_id && isValidUUID(p.notebook_id));
-      if (validPages.length > 0) {
+      // 3. Push local pages to Supabase in batches of 5
+      const BATCH_SIZE = 5;
+      for (let i = 0; i < validPages.length; i += BATCH_SIZE) {
+        const batch = validPages.slice(i, i + BATCH_SIZE);
         await Promise.all(
-          validPages.map((p) => {
+          batch.map((p) => {
             let formattedData = p.canvas_data;
             if (typeof formattedData === 'string') {
               try {
@@ -345,9 +358,17 @@ export const useBoardStore = create<BoardState>((set, get) => ({
             });
           })
         );
+        doneUnits += batch.length;
+        const currentCount = Math.min(i + BATCH_SIZE, validPages.length);
+        const pct = Math.min(99, Math.round((doneUnits / totalUnits) * 100));
+        set({ syncProgress: pct, syncStatusText: `Syncing pages ${currentCount}/${validPages.length} (${pct}%)...` });
       }
 
       // 4. Fetch all remote records from Supabase
+      doneUnits += 2;
+      const downloadPct = Math.min(95, Math.round((doneUnits / totalUnits) * 100));
+      set({ syncProgress: downloadPct, syncStatusText: `Downloading updates (${downloadPct}%)...` });
+
       const [foldersRes, notebooksRes, pagesRes] = await Promise.all([
         supabase.from('folders').select('*').eq('user_id', userId).order('created_at', { ascending: true }),
         supabase.from('notebooks').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
@@ -378,7 +399,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         folders: mergedFolders,
         notebooks: mergedNotebooks,
         isSyncing: false,
-        syncStatusText: `Synced all ${mergedNotebooks.length} notebooks`,
+        syncProgress: 100,
+        syncStatusText: `Synced 100% (${mergedNotebooks.length} notebooks)`,
       });
 
       await Promise.all([
@@ -387,11 +409,11 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         setIdbItem(pagesKey, mergedPages),
       ]);
 
-      setTimeout(() => set({ syncStatusText: null }), 3000);
+      setTimeout(() => set({ syncStatusText: null, syncProgress: 0 }), 3500);
     } catch (err) {
       console.warn('Sync all notebooks error:', err);
-      set({ isSyncing: false, syncStatusText: 'Sync failed (offline)' });
-      setTimeout(() => set({ syncStatusText: null }), 3000);
+      set({ isSyncing: false, syncProgress: 0, syncStatusText: 'Sync failed (offline)' });
+      setTimeout(() => set({ syncStatusText: null }), 3500);
     }
   },
 
