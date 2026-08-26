@@ -35,58 +35,86 @@ fabric.FabricObject.prototype.perPixelTargetFind = true;
 fabric.Textbox.prototype.lockScalingFlip = true;
 fabric.IText.prototype.lockScalingFlip = true;
 
-// Custom insertChars hook to support seamless superscript and subscript typing
+// Complete Unicode Super/Sub mappings for flawless cross-platform rendering
+const SUPERSCRIPT_MAP: Record<string, string> = {
+  '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+  '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+  '+': '⁺', '-': '⁻', '=': '⁼', '(': '⁽', ')': '⁾',
+  'a': 'ᵃ', 'b': 'ᵇ', 'c': 'ᶜ', 'd': 'ᵈ', 'e': 'ᵉ',
+  'f': 'ᶠ', 'g': 'ᵍ', 'h': 'ʰ', 'i': 'ⁱ', 'j': 'ʲ',
+  'k': 'ᵏ', 'l': 'ˡ', 'm': 'ᵐ', 'n': 'ⁿ', 'o': 'ᵒ',
+  'p': 'ᵖ', 'r': 'ʳ', 's': 'ˢ', 't': 'ᵗ', 'u': 'ᵘ',
+  'v': 'ᵛ', 'w': 'ʷ', 'x': 'ˣ', 'y': 'ʸ', 'z': 'ᶻ',
+  'A': 'ᴬ', 'B': 'ᴮ', 'D': 'ᴰ', 'E': 'ᴱ', 'G': 'ᴳ',
+  'H': 'ᴴ', 'I': 'ᴵ', 'J': 'ᴶ', 'K': 'ᴷ', 'L': 'ᴸ',
+  'M': 'ᴹ', 'N': 'ᴺ', 'O': 'ᴼ', 'P': 'ᴾ', 'R': 'ᴿ',
+  'T': 'ᵀ', 'U': 'ᵁ', 'V': 'ⱽ', 'W': 'ᵂ',
+};
+
+const SUBSCRIPT_MAP: Record<string, string> = {
+  '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
+  '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
+  '+': '₊', '-': '₋', '=': '₌', '(': '₍', ')': '₎',
+  'a': 'ₐ', 'e': 'ₑ', 'h': 'ₕ', 'i': 'ᵢ', 'j': 'ⱼ',
+  'k': 'ₖ', 'l': 'ₗ', 'm': 'ₘ', 'n': 'ₙ', 'o': 'ₒ',
+  'p': 'ₚ', 'r': 'ᵣ', 's': 'ₛ', 't': 'ₜ', 'u': 'ᵤ',
+  'v': 'ᵥ', 'x': 'ₓ',
+};
+
+const REVERSE_SUPER_MAP: Record<string, string> = Object.fromEntries(
+  Object.entries(SUPERSCRIPT_MAP).map(([k, v]) => [v, k])
+);
+
+const REVERSE_SUB_MAP: Record<string, string> = Object.fromEntries(
+  Object.entries(SUBSCRIPT_MAP).map(([k, v]) => [v, k])
+);
+
+const toSuperscript = (str: string): string => {
+  return str.split('').map(ch => SUPERSCRIPT_MAP[ch] || ch).join('');
+};
+
+const toSubscript = (str: string): string => {
+  return str.split('').map(ch => SUBSCRIPT_MAP[ch] || ch).join('');
+};
+
+const fromSuperOrSub = (str: string): string => {
+  return str.split('').map(ch => REVERSE_SUPER_MAP[ch] || REVERSE_SUB_MAP[ch] || ch).join('');
+};
+
+const isAllSuperscript = (str: string): boolean => {
+  if (!str || str.trim().length === 0) return false;
+  return str.split('').every(ch => !!REVERSE_SUPER_MAP[ch] || ch === ' ');
+};
+
+const isAllSubscript = (str: string): boolean => {
+  if (!str || str.trim().length === 0) return false;
+  return str.split('').every(ch => !!REVERSE_SUB_MAP[ch] || ch === ' ');
+};
+
+// Custom insertChars hook to support seamless real-time superscript and subscript typing
 const origTextboxInsertChars = fabric.Textbox.prototype.insertChars;
 fabric.Textbox.prototype.insertChars = function(chars: string, style?: any, start?: number, end?: number) {
   const currentFormat = useBoardStore.getState().activeTextFormat;
-  let customStyle = style;
+  let finalChars = chars;
   if (currentFormat?.superscript) {
-    const baseSize = typeof this.fontSize === 'number' ? this.fontSize : 24;
-    customStyle = {
-      ...(style || {}),
-      deltaY: -Math.round(baseSize * 0.35),
-      fontSize: Math.round(baseSize * 0.65),
-      superscript: true,
-      subscript: false,
-    };
+    finalChars = toSuperscript(chars);
   } else if (currentFormat?.subscript) {
-    const baseSize = typeof this.fontSize === 'number' ? this.fontSize : 24;
-    customStyle = {
-      ...(style || {}),
-      deltaY: Math.round(baseSize * 0.3),
-      fontSize: Math.round(baseSize * 0.65),
-      subscript: true,
-      superscript: false,
-    };
+    finalChars = toSubscript(chars);
   }
-  return (origTextboxInsertChars as any).call(this, chars, customStyle, start, end);
+  return (origTextboxInsertChars as any).call(this, finalChars, style, start, end);
 };
 
 const origITextInsertChars = fabric.IText.prototype.insertChars;
 if (typeof origITextInsertChars === 'function') {
   fabric.IText.prototype.insertChars = function(chars: string, style?: any, start?: number, end?: number) {
     const currentFormat = useBoardStore.getState().activeTextFormat;
-    let customStyle = style;
+    let finalChars = chars;
     if (currentFormat?.superscript) {
-      const baseSize = typeof this.fontSize === 'number' ? this.fontSize : 24;
-      customStyle = {
-        ...(style || {}),
-        deltaY: -Math.round(baseSize * 0.35),
-        fontSize: Math.round(baseSize * 0.65),
-        superscript: true,
-        subscript: false,
-      };
+      finalChars = toSuperscript(chars);
     } else if (currentFormat?.subscript) {
-      const baseSize = typeof this.fontSize === 'number' ? this.fontSize : 24;
-      customStyle = {
-        ...(style || {}),
-        deltaY: Math.round(baseSize * 0.3),
-        fontSize: Math.round(baseSize * 0.65),
-        subscript: true,
-        superscript: false,
-      };
+      finalChars = toSubscript(chars);
     }
-    return (origITextInsertChars as any).call(this, chars, customStyle, start, end);
+    return (origITextInsertChars as any).call(this, finalChars, style, start, end);
   };
 }
 
@@ -783,17 +811,18 @@ export const Board: React.FC = () => {
           }
 
           const currentStoreFormat = useBoardStore.getState().activeTextFormat;
-          const isSuper = (styles.superscript !== undefined) 
-            ? !!styles.superscript 
-            : (typeof styles.deltaY === 'number' && styles.deltaY < 0)
-            ? true
-            : (textObj.isEditing && (textObj.selectionStart === textObj.selectionEnd) && currentStoreFormat?.superscript) || false;
+          const currentText = textObj.text || '';
+          const start = textObj.selectionStart || 0;
+          const end = textObj.selectionEnd || start;
+          const selectedText = (start !== end) ? currentText.substring(start, end) : '';
 
-          const isSub = (styles.subscript !== undefined) 
-            ? !!styles.subscript 
-            : (typeof styles.deltaY === 'number' && styles.deltaY > 0)
-            ? true
-            : (textObj.isEditing && (textObj.selectionStart === textObj.selectionEnd) && currentStoreFormat?.subscript) || false;
+          const isSuper = (selectedText && isAllSuperscript(selectedText)) 
+            || (styles.superscript !== undefined ? !!styles.superscript : (typeof styles.deltaY === 'number' && styles.deltaY < 0))
+            || (textObj.isEditing && (start === end) && !!currentStoreFormat?.superscript);
+
+          const isSub = (selectedText && isAllSubscript(selectedText)) 
+            || (styles.subscript !== undefined ? !!styles.subscript : (typeof styles.deltaY === 'number' && styles.deltaY > 0))
+            || (textObj.isEditing && (start === end) && !!currentStoreFormat?.subscript);
 
           useBoardStore.getState().setActiveShapeFormat(null);
           useBoardStore.getState().setActiveTextFormat({
@@ -838,44 +867,12 @@ export const Board: React.FC = () => {
       }
     };
 
-    const onSelectionCreated = (e: any) => {
-      if (e.selected) {
-        e.selected.forEach((obj: any) => {
-          obj.perPixelTargetFind = false;
-          normalizeTextObject(obj);
-        });
-      }
-      handleSelectionUpdate();
-    };
-
-    const onSelectionUpdated = (e: any) => {
-      if (e.deselected) {
-        e.deselected.forEach((obj: any) => {
-          obj.perPixelTargetFind = true;
-        });
-      }
-      if (e.selected) {
-        e.selected.forEach((obj: any) => {
-          obj.perPixelTargetFind = false;
-          normalizeTextObject(obj);
-        });
-      }
-      handleSelectionUpdate();
-    };
-
-    const onSelectionCleared = (e: any) => {
+    canvas.on('selection:created', handleSelectionUpdate);
+    canvas.on('selection:updated', handleSelectionUpdate);
+    canvas.on('selection:cleared', () => {
       useBoardStore.getState().setActiveTextFormat(null);
       useBoardStore.getState().setActiveShapeFormat(null);
-      if (e.deselected) {
-        e.deselected.forEach((obj: any) => {
-          obj.perPixelTargetFind = true;
-        });
-      }
-    };
-
-    canvas.on('selection:created', onSelectionCreated);
-    canvas.on('selection:updated', onSelectionUpdated);
-    canvas.on('selection:cleared', onSelectionCleared);
+    });
     canvas.on('text:selection:changed', handleSelectionUpdate);
     canvas.on('text:changed', handleSelectionUpdate);
 
@@ -987,22 +984,49 @@ export const Board: React.FC = () => {
           }
         }
 
-        if (hasSelectionRange) {
-          // 1. Partial selection range inside editing mode: Apply styles ONLY to highlighted characters
-          textObj.setSelectionStyles(appliedUpdates, start, end);
+        let newSubTextLength = end - start;
 
-          // If the user highlighted the entire text, also sync object-level defaults
-          if (start === 0 && end >= (textObj.text?.length || 0)) {
+        if (hasSelectionRange) {
+          const currentText = textObj.text || '';
+          const selectedText = currentText.substring(start, end);
+          let newSubText = selectedText;
+
+          if (updates.superscript === true) {
+            newSubText = toSuperscript(selectedText);
+          } else if (updates.subscript === true) {
+            newSubText = toSubscript(selectedText);
+          } else if (updates.superscript === false || updates.subscript === false) {
+            newSubText = fromSuperOrSub(selectedText);
+          }
+
+          if (newSubText !== selectedText) {
+            const updatedFullText = currentText.substring(0, start) + newSubText + currentText.substring(end);
+            textObj.set('text', updatedFullText);
+            newSubTextLength = newSubText.length;
+            textObj.selectionStart = start;
+            textObj.selectionEnd = start + newSubTextLength;
+          }
+
+          textObj.setSelectionStyles(appliedUpdates, start, start + newSubTextLength);
+
+          if (start === 0 && (start + newSubTextLength) >= (textObj.text?.length || 0)) {
             textObj.set(appliedUpdates);
           }
         } else {
-          // 2. Whole text box selected (or cursor with no range):
-          // Alter the ENTIRE text box all at once
+          // No range selected
           textObj.set(appliedUpdates);
 
-          if (updates.superscript !== undefined || updates.subscript !== undefined) {
-            if (textObj.text && textObj.text.length > 0) {
-              textObj.setSelectionStyles(appliedUpdates, 0, textObj.text.length);
+          if (updates.superscript === true) {
+            if (textObj.text && textObj.text.length > 0 && !isEditing) {
+              textObj.set('text', toSuperscript(textObj.text));
+            }
+          } else if (updates.subscript === true) {
+            if (textObj.text && textObj.text.length > 0 && !isEditing) {
+              textObj.set('text', toSubscript(textObj.text));
+            }
+          } else if (updates.superscript === false || updates.subscript === false) {
+            if (textObj.text && textObj.text.length > 0 && !isEditing) {
+              textObj.set('text', fromSuperOrSub(textObj.text));
             }
           } else {
             for (const key of Object.keys(appliedUpdates)) {
@@ -1032,12 +1056,15 @@ export const Board: React.FC = () => {
         canvas.requestRenderAll();
 
         // Ensure Fabric's hidden textarea remains focused so keyboard input is never blocked
-        if (isEditing && textObj.hiddenTextarea) {
+        if (textObj.hiddenTextarea) {
+          textObj.hiddenTextarea.focus();
+        }
+        if (isEditing) {
           setTimeout(() => {
             if (textObj.isEditing && textObj.hiddenTextarea) {
               textObj.hiddenTextarea.focus();
               textObj.selectionStart = start;
-              textObj.selectionEnd = end;
+              textObj.selectionEnd = hasSelectionRange ? (start + newSubTextLength) : end;
             }
           }, 0);
         }

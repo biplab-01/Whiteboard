@@ -88,7 +88,7 @@ export const TextPropertiesPanel: React.FC = () => {
 
   return (
     <div 
-      onMouseDown={(e) => {
+      onMouseDownCapture={(e) => {
         const target = e.target as HTMLElement;
         if (target.tagName !== 'INPUT' && target.tagName !== 'SELECT' && target.tagName !== 'TEXTAREA') {
           e.preventDefault();
