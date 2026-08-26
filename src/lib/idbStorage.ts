@@ -146,3 +146,40 @@ export const getCachedData = <T>(key: string, defaultVal: T): T => {
 export const initIdbStorage = async (keys: string[]) => {
   await Promise.all(keys.map(k => getIdbItem(k, [] as any)));
 };
+
+// Asynchronously remove item from IndexedDB and clear from memoryCache & localStorage
+export const removeIdbItem = async (key: string): Promise<void> => {
+  delete memoryCache[key];
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // ignore
+  }
+
+  try {
+    const db = await getDB();
+    return new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction([STORE_NAME], 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.delete(key);
+
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  } catch (err) {
+    console.warn(`IndexedDB delete error for ${key}:`, err);
+  }
+};
+
+// User scoped storage key helper to prevent guest and multi-account state collisions
+export const getUserStorageKey = (userId: string | null | undefined, baseKey: string): string => {
+  const safeUser = userId && userId.trim() ? userId.trim() : 'guest';
+  return `${baseKey}_${safeUser}`;
+};
+
+// Clear cached user data
+export const clearUserData = async (userId: string) => {
+  const baseKeys = ['nova_folders', 'nova_notebooks', 'nova_pages', 'nova_page_bg_settings', 'nova_bg_settings'];
+  await Promise.all(baseKeys.map(bk => removeIdbItem(getUserStorageKey(userId, bk))));
+};
+

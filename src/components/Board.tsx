@@ -1528,7 +1528,7 @@ export const Board: React.FC = () => {
 
     window.addEventListener('insert-media', handleInsertMedia);
     return () => window.removeEventListener('insert-media', handleInsertMedia);
-  }, [pageSize, pageOrientation, recordState, saveState]);
+  }, [pageSize, pageOrientation, recordState, saveState, isDarkMode]);
 
   useEffect(() => {
     const handleSaveRequest = () => {
@@ -1607,7 +1607,8 @@ export const Board: React.FC = () => {
       canvas.requestRenderAll();
       initPageHistory(currentPageId, getCanvasSnapshot(canvas));
     }
-  }, [currentPageId, renderBackground, initPageHistory, getCanvasSnapshot]);
+  }, [currentPageId, renderBackground, initPageHistory, getCanvasSnapshot, pageSize, pageOrientation]);
+
 
   // Handle Background & Page Dimension changes
   useEffect(() => {
@@ -1615,6 +1616,54 @@ export const Board: React.FC = () => {
     if (!canvas) return;
     renderBackground(canvas);
   }, [renderBackground]);
+
+  // Handle Remote Realtime Page Updates from another device
+  useEffect(() => {
+    const handleRemotePageUpdate = async (e: Event) => {
+      const customEvent = e as CustomEvent<any>;
+      const remotePage = customEvent.detail;
+      const canvas = fabricRef.current;
+      const livePageId = useBoardStore.getState().currentPageId;
+
+      if (!canvas || !remotePage || remotePage.id !== livePageId) return;
+
+      // If user is currently editing text, don't interrupt
+      const active = canvas.getActiveObject();
+      if (active && (active as any).isEditing) return;
+
+      if (remotePage.canvas_data) {
+        try {
+          const parsed = typeof remotePage.canvas_data === 'string'
+            ? JSON.parse(remotePage.canvas_data)
+            : remotePage.canvas_data;
+
+          await canvas.loadFromJSON(parsed);
+
+          const liveTool = useBoardStore.getState().currentTool;
+          const isSelect = liveTool === 'select';
+          canvas.forEachObject((obj) => {
+            if ((obj as any).name !== 'a4-background' && (obj as any).name !== 'a4-ruled-line') {
+              obj.selectable = isSelect;
+              obj.evented = true;
+              obj.strokeUniform = true;
+              if (obj.type === 'textbox' || obj.type === 'i-text') {
+                normalizeTextObject(obj);
+              }
+            }
+          });
+
+          renderBackground(canvas);
+          canvas.requestRenderAll();
+        } catch (err) {
+          console.warn('Error applying remote page update:', err);
+        }
+      }
+    };
+
+    window.addEventListener('remote-page-update', handleRemotePageUpdate);
+    return () => window.removeEventListener('remote-page-update', handleRemotePageUpdate);
+  }, [renderBackground]);
+
 
   // Tool setup (Pan, Pen, Shapes, Text, etc)
   useEffect(() => {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAuthStore } from './store/useAuthStore';
 import { useBoardStore } from './store/useBoardStore';
+import { useRealtimeSync } from './hooks/useRealtimeSync';
 import { Auth } from './components/Auth';
 import { Dashboard } from './components/Dashboard/Dashboard';
 import { Board } from './components/Board';
@@ -12,12 +13,18 @@ import { TextPropertiesPanel } from './components/TextPropertiesPanel';
 import { ZoomControls } from './components/ZoomControls';
 import { ExportModal } from './components/ExportModal';
 import { GraphingCalculator } from './components/GraphingCalculator';
+import { SyncStatusBadge } from './components/SyncStatusBadge';
+import { NotebookTitle } from './components/NotebookTitle';
 import { Moon, Sun, ArrowLeft } from 'lucide-react';
 
 function App() {
   const { loading, initialize, showAuthModal, setShowAuthModal } = useAuthStore();
   const { activeNotebookId, closeNotebook, isDarkMode, toggleTheme, setCurrentTool } = useBoardStore();
   const [showCalculator, setShowCalculator] = useState(false);
+
+  // Initialize Realtime Multi-Device Sync Subscriptions
+  useRealtimeSync();
+
 
   useEffect(() => {
     const handleOpenCalc = () => setShowCalculator(true);
@@ -125,21 +132,28 @@ function App() {
       <ExportModal />
       <GraphingCalculator isOpen={showCalculator} onClose={() => setShowCalculator(false)} />
 
-      {/* Back to Dashboard Button */}
-      <button 
-        onClick={() => {
-          window.dispatchEvent(new CustomEvent('save-canvas-state'));
-          setTimeout(() => {
-            closeNotebook();
-          }, 30);
-        }}
-        className={`fixed top-6 left-6 px-3.5 py-2.5 rounded-xl shadow-md border backdrop-blur-md transition-all z-20 flex items-center gap-2 text-sm font-medium ${
-          isDarkMode ? 'bg-gray-800/80 border-gray-700 text-gray-200 hover:bg-gray-700' : 'bg-white/80 border-gray-200 text-gray-700 hover:bg-gray-50'
-        }`}
-        title="Back to Library"
-      >
-        <ArrowLeft size={18} /> <span className="pr-0.5">Library</span>
-      </button>
+      {/* Top Center: Notebook Title Editor */}
+      <NotebookTitle />
+
+      {/* Top Left Controls: Back to Library & Sync Status Badge */}
+      <div className="fixed top-6 left-6 z-20 flex items-center gap-2.5">
+        <button 
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent('save-canvas-state'));
+            setTimeout(() => {
+              closeNotebook();
+            }, 30);
+          }}
+          className={`px-3.5 py-2.5 rounded-xl shadow-md border backdrop-blur-md transition-all flex items-center gap-2 text-sm font-medium ${
+            isDarkMode ? 'bg-gray-800/80 border-gray-700 text-gray-200 hover:bg-gray-700' : 'bg-white/80 border-gray-200 text-gray-700 hover:bg-gray-50'
+          }`}
+          title="Back to Library"
+        >
+          <ArrowLeft size={18} /> <span className="pr-0.5">Library</span>
+        </button>
+
+        <SyncStatusBadge />
+      </div>
 
       {/* Theme Toggle */}
       <button 

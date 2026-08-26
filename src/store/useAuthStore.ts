@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { User, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
+import { useBoardStore } from './useBoardStore';
 
 interface AuthState {
   user: User | null;
@@ -60,7 +61,8 @@ export const useAuthStore = create<AuthState>((set) => ({
         if (session?.user) {
           set({ session, user: session.user, loading: false });
         } else {
-          set({ session: null, user: getGuestUser(), loading: false });
+          const guest = getGuestUser();
+          set({ session: null, user: guest, loading: false });
         }
       });
     } catch (e) {
@@ -76,10 +78,13 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
     const newGuest = `guest_${Math.random().toString(36).substring(2, 9)}`;
     localStorage.setItem('nova_guest_id', newGuest);
+    const guestUser = getGuestUser();
     set({
-      user: getGuestUser(),
+      user: guestUser,
       session: null,
       loading: false
     });
+    useBoardStore.getState().closeNotebook();
+    useBoardStore.getState().fetchLibrary(guestUser.id);
   }
 }));

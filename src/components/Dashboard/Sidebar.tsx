@@ -124,6 +124,36 @@ export const Sidebar = ({ currentView, setCurrentView }: SidebarProps) => {
         )}
       </div>
 
+      {/* Cloud Sync Status in Sidebar */}
+      <div className={`mt-auto mb-4 p-3 rounded-xl border ${
+        isDarkMode ? 'bg-[#1a1c29]/90 border-white/5' : 'bg-white border-gray-200 shadow-sm'
+      }`}>
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Cloud Sync</span>
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+        </div>
+        <p className="text-[11px] opacity-60 mb-2.5 leading-relaxed">
+          {user?.id && !user.is_anonymous ? 'All notebooks synchronized across devices.' : 'Using local storage. Sign in to sync.'}
+        </p>
+        <button
+          onClick={() => {
+            if (user?.id && !user.is_anonymous) {
+              useBoardStore.getState().syncAllNotebooks(user.id);
+            } else {
+              useAuthStore.getState().setShowAuthModal(true);
+            }
+          }}
+          className={`w-full py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm ${
+            user?.id && !user.is_anonymous
+              ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
+              : 'bg-amber-600 hover:bg-amber-500 text-white'
+          }`}
+        >
+          {user?.id && !user.is_anonymous ? 'Sync Library Now' : 'Sign in to Sync'}
+        </button>
+      </div>
+
+
       {/* Delete Folder Confirmation Dialog */}
       {folderToDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">

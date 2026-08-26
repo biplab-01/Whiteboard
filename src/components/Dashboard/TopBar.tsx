@@ -1,6 +1,7 @@
-import { Moon, Search, Sun, LogOut, Plus, FileUp, Cloud } from 'lucide-react';
+import { Moon, Search, Sun, LogOut, Plus, FileUp } from 'lucide-react';
 import { useBoardStore } from '../../store/useBoardStore';
 import { useAuthStore } from '../../store/useAuthStore';
+import { SyncStatusBadge } from '../SyncStatusBadge';
 
 interface TopBarProps {
   searchQuery: string;
@@ -9,7 +10,7 @@ interface TopBarProps {
 }
 
 export const TopBar = ({ searchQuery, setSearchQuery, onOpenImportModal }: TopBarProps) => {
-  const { isDarkMode, toggleTheme, createNotebook, openNotebook, isSyncing, syncStatusText } = useBoardStore();
+  const { isDarkMode, toggleTheme, createNotebook, openNotebook } = useBoardStore();
   const { user, signOut, setShowAuthModal } = useAuthStore();
   
   const isAnonymous = user?.is_anonymous || !user?.email;
@@ -53,6 +54,9 @@ export const TopBar = ({ searchQuery, setSearchQuery, onOpenImportModal }: TopBa
       </div>
 
       <div className="flex items-center gap-3">
+        {/* Realtime Cloud Sync Status Indicator */}
+        <SyncStatusBadge />
+
         <button 
           onClick={toggleTheme}
           className={`p-2 rounded-full transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-gray-400 hover:text-yellow-400' : 'hover:bg-gray-200 text-gray-600 hover:text-indigo-600'}`}
@@ -95,27 +99,6 @@ export const TopBar = ({ searchQuery, setSearchQuery, onOpenImportModal }: TopBa
             </>
           ) : (
             <>
-              <button
-                disabled={isSyncing}
-                onClick={async () => {
-                  if (user?.id) {
-                    await useBoardStore.getState().fetchLibrary(user.id);
-                  }
-                }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
-                  isSyncing
-                    ? 'border-teal-500/50 bg-teal-500/10 text-teal-300'
-                    : syncStatusText
-                    ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
-                    : isDarkMode 
-                    ? 'border-gray-700 hover:bg-gray-800 text-indigo-300' 
-                    : 'border-gray-200 hover:bg-gray-100 text-indigo-600'
-                }`}
-                title="Sync all notebooks & pages with cloud"
-              >
-                <Cloud size={14} className={isSyncing ? 'animate-spin text-teal-400' : ''} />
-                <span>{syncStatusText || (isSyncing ? 'Syncing...' : 'Sync Cloud')}</span>
-              </button>
               <span className="text-sm opacity-60 hidden md:block">{user?.email}</span>
               <button 
                 onClick={() => signOut()}
@@ -132,3 +115,4 @@ export const TopBar = ({ searchQuery, setSearchQuery, onOpenImportModal }: TopBa
     </header>
   );
 };
+
