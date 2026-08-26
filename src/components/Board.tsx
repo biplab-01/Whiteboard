@@ -343,6 +343,7 @@ const sliceObjectWithEraser = (
 export const Board: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fabricRef = useRef<fabric.Canvas | null>(null);
+  const activePageIdRef = useRef<string | null>(null);
   const clipboardRef = useRef<fabric.FabricObject | null>(null);
   const historyMapRef = useRef<Map<string, { undoStack: string[]; redoStack: string[] }>>(new Map());
   const isHistoryOperationRef = useRef<boolean>(false);
@@ -463,25 +464,26 @@ export const Board: React.FC = () => {
   }, []);
 
   const saveState = useCallback((snapshot?: string) => {
-    const { currentPageId: livePageId, updatePageData: liveUpdate } = useBoardStore.getState();
+    const targetPageId = activePageIdRef.current || useBoardStore.getState().currentPageId;
+    const { updatePageData: liveUpdate } = useBoardStore.getState();
     const canvas = fabricRef.current;
-    if (canvas && livePageId) {
+    if (canvas && targetPageId) {
       const data = snapshot ?? getCanvasSnapshot(canvas);
-      liveUpdate(livePageId, data);
+      liveUpdate(targetPageId, data);
     }
   }, [getCanvasSnapshot]);
 
   const recordState = useCallback(() => {
     if (isHistoryOperationRef.current) return;
     const canvas = fabricRef.current;
-    const livePageId = useBoardStore.getState().currentPageId;
-    if (!canvas || !livePageId) return;
+    const targetPageId = activePageIdRef.current || useBoardStore.getState().currentPageId;
+    if (!canvas || !targetPageId) return;
 
     const snapshot = getCanvasSnapshot(canvas);
-    let history = historyMapRef.current.get(livePageId);
+    let history = historyMapRef.current.get(targetPageId);
     if (!history) {
       history = { undoStack: [], redoStack: [] };
-      historyMapRef.current.set(livePageId, history);
+      historyMapRef.current.set(targetPageId, history);
     }
 
     const top = history.undoStack[history.undoStack.length - 1];
@@ -900,6 +902,17 @@ export const Board: React.FC = () => {
           for (const key of Object.keys(updates)) {
             clearStylePropertyFromAllChars(textObj, key);
           }
+        }
+
+        // Persist formatting preferences for future text boxes (size, family, color)
+        if (typeof updates.fontSize === 'number') {
+          useBoardStore.getState().setLastTextSize(updates.fontSize);
+        }
+        if (typeof updates.fontFamily === 'string') {
+          useBoardStore.getState().setLastFontFamily(updates.fontFamily);
+        }
+        if (typeof updates.fill === 'string') {
+          useBoardStore.getState().setLastTextColor(updates.fill);
         }
 
         // Force clear cache, re-wrap lines, recalculate dimensions and coordinate handles
@@ -1550,6 +1563,14 @@ export const Board: React.FC = () => {
     const canvas = fabricRef.current;
     if (!canvas || !currentPageId) return;
 
+    // 1. If switching from an existing page, save that previous page's snapshot FIRST
+    const previousPageId = activePageIdRef.current;
+    if (previousPageId && previousPageId !== currentPageId) {
+      const prevSnapshot = getCanvasSnapshot(canvas);
+      useBoardStore.getState().updatePageData(previousPageId, prevSnapshot);
+    }
+    activePageIdRef.current = currentPageId;
+
     canvas.discardActiveObject();
 
     const currentPages = useBoardStore.getState().pages;
@@ -2020,15 +2041,23 @@ export const Board: React.FC = () => {
         };
 
         if (currentTool === 'text') {
-          // Create a properly styled Textbox and activate editing immediately
-          const textColor = strokeColor || (isDarkMode ? '#ffffff' : '#1e293b');
+          const { lastTextSize, lastFontFamily, lastTextColor } = useBoardStore.getState();
+          const defaultSize = lastTextSize || 24;
+          const defaultFont = lastFontFamily || 'Inter';
+          const textColor = lastTextColor || strokeColor || (isDarkMode ? '#ffffff' : '#1e293b');
+
+          // Create a properly styled Textbox using last selected size/font/color and activate editing
           const textbox = new fabric.Textbox('Type text here', {
             left: origX,
             top: origY,
-            width: 220,
-            fontSize: 24,
-            fontFamily: 'Inter',
+            width: Math.max(220, defaultSize * 8),
+            fontSize: defaultSize,
+            fontFamily: defaultFont,
             fill: textColor,
+            fontWeight: 'normal',
+            fontStyle: 'normal',
+            underline: false,
+            linethrough: false,
             transparentCorners: false,
             borderColor: '#6366f1',
             cornerColor: '#6366f1',
@@ -2050,9 +2079,10 @@ export const Board: React.FC = () => {
           textbox.enterEditing();
           textbox.selectAll();
           canvas.requestRenderAll();
+
           setActiveTextFormat({
-            fontFamily: 'Inter',
-            fontSize: 24,
+            fontFamily: defaultFont,
+            fontSize: defaultSize,
             fill: textColor,
             textBackgroundColor: '',
             fontWeight: 'normal',

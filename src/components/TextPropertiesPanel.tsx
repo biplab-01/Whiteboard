@@ -13,7 +13,16 @@ import {
 import { HexColorPicker } from 'react-colorful';
 
 export const TextPropertiesPanel: React.FC = () => {
-  const { activeTextFormat, isDarkMode, setActiveTextFormat, opacity, setOpacity } = useBoardStore();
+  const { 
+    activeTextFormat, 
+    isDarkMode, 
+    setActiveTextFormat, 
+    opacity, 
+    setOpacity,
+    setLastTextSize,
+    setLastFontFamily,
+    setLastTextColor 
+  } = useBoardStore();
   const [showTextColorPicker, setShowTextColorPicker] = useState(false);
   const [showHighlightPicker, setShowHighlightPicker] = useState(false);
 
@@ -26,7 +35,18 @@ export const TextPropertiesPanel: React.FC = () => {
       ...updates
     });
 
-    // 2. Dispatch custom event to let Board canvas apply changes to the Fabric text object
+    // 2. Persist text preferences for future textboxes (excluding bold/italic/underline/linethrough)
+    if (typeof updates.fontSize === 'number') {
+      setLastTextSize(updates.fontSize);
+    }
+    if (typeof updates.fontFamily === 'string') {
+      setLastFontFamily(updates.fontFamily);
+    }
+    if (typeof updates.fill === 'string') {
+      setLastTextColor(updates.fill);
+    }
+
+    // 3. Dispatch custom event to let Board canvas apply changes to the Fabric text object
     window.dispatchEvent(new CustomEvent('format-text', { detail: updates }));
   };
 

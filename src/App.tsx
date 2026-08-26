@@ -39,22 +39,10 @@ function App() {
       }
       
       const key = e.key.toLowerCase();
-      
       const isCtrlOrMeta = e.ctrlKey || e.metaKey;
       
-      if (isCtrlOrMeta) {
-        if (key === 'z') {
-          e.preventDefault();
-          if (e.shiftKey) {
-            window.dispatchEvent(new CustomEvent('board-redo'));
-          } else {
-            window.dispatchEvent(new CustomEvent('board-undo'));
-          }
-        } else if (key === 'y') {
-          e.preventDefault();
-          window.dispatchEvent(new CustomEvent('board-redo'));
-        }
-      } else {
+      // Ctrl/Meta shortcuts (Undo, Redo, Copy, Paste, etc.) are handled inside Board.tsx
+      if (!isCtrlOrMeta) {
         switch (key) {
           case 'v': setCurrentTool('select'); break;
           case 'p': setCurrentTool('pen'); break;

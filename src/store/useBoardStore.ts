@@ -214,6 +214,14 @@ export interface BoardState {
   activeShapeFormat: ShapeFormat | null;
   setActiveShapeFormat: (format: ShapeFormat | null) => void;
 
+  // Text Tool Preferences (Persisted across new textboxes)
+  lastTextSize: number;
+  lastFontFamily: string;
+  lastTextColor: string;
+  setLastTextSize: (size: number) => void;
+  setLastFontFamily: (font: string) => void;
+  setLastTextColor: (color: string) => void;
+
   // History / Undo & Redo
   canUndo: boolean;
   canRedo: boolean;
@@ -967,15 +975,32 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       };
     });
 
-    const combined = [
-      ...pages.slice(0, insertIndex),
-      ...newCreatedPages,
-      ...pages.slice(insertIndex),
-    ].map((p, idx) => ({
-      ...p,
-      order_index: idx,
-      name: p.name.startsWith('Page ') ? `Page ${idx + 1}` : p.name,
-    }));
+    const isOnlyBlankPage = pages.length === 1 && (
+      !pages[0].canvas_data || 
+      (typeof pages[0].canvas_data === 'object' && (!(pages[0].canvas_data as any).objects || (pages[0].canvas_data as any).objects.length === 0)) ||
+      (typeof pages[0].canvas_data === 'string' && (pages[0].canvas_data === '{"objects":[]}' || pages[0].canvas_data === ''))
+    );
+
+    let combined: PageRow[];
+    if (isOnlyBlankPage) {
+      combined = newCreatedPages.map((p, idx) => ({
+        ...p,
+        order_index: idx,
+        name: `Page ${idx + 1}`,
+      }));
+    } else {
+      const currentIndex = pages.findIndex((p) => p.id === afterPageId);
+      const insertIndex = currentIndex >= 0 ? currentIndex + 1 : pages.length;
+      combined = [
+        ...pages.slice(0, insertIndex),
+        ...newCreatedPages,
+        ...pages.slice(insertIndex),
+      ].map((p, idx) => ({
+        ...p,
+        order_index: idx,
+        name: `Page ${idx + 1}`,
+      }));
+    }
 
     const firstNewPageId = newCreatedPages[0].id;
     set({
@@ -1074,6 +1099,36 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   setActiveTextFormat: (format) => set({ activeTextFormat: format }),
   activeShapeFormat: null,
   setActiveShapeFormat: (format) => set({ activeShapeFormat: format }),
+
+  lastTextSize: typeof window !== 'undefined' && localStorage.getItem('nova_last_text_size')
+    ? Math.max(8, parseInt(localStorage.getItem('nova_last_text_size')!) || 24)
+    : 24,
+  lastFontFamily: typeof window !== 'undefined' && localStorage.getItem('nova_last_font_family')
+    ? localStorage.getItem('nova_last_font_family')!
+    : 'Inter',
+  lastTextColor: typeof window !== 'undefined' && localStorage.getItem('nova_last_text_color')
+    ? localStorage.getItem('nova_last_text_color')!
+    : '',
+
+  setLastTextSize: (size: number) => {
+    const validSize = Math.max(8, Math.min(240, size));
+    set({ lastTextSize: validSize });
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('nova_last_text_size', validSize.toString());
+    }
+  },
+  setLastFontFamily: (font: string) => {
+    set({ lastFontFamily: font });
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('nova_last_font_family', font);
+    }
+  },
+  setLastTextColor: (color: string) => {
+    set({ lastTextColor: color });
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('nova_last_text_color', color);
+    }
+  },
 
   canUndo: false,
   canRedo: false,
