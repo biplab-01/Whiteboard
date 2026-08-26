@@ -78,13 +78,13 @@ export const BackgroundSettings: React.FC = () => {
     <div ref={containerRef} className="relative">
       <button 
         onClick={() => setIsOpen(!isOpen)}
-        className={`px-3.5 py-2.5 rounded-xl shadow-md border backdrop-blur-md transition-all flex items-center gap-2 font-medium text-sm ${
+        className={`px-3.5 py-2 rounded-xl shadow-md border backdrop-blur-md transition-all flex items-center gap-2 font-medium text-sm h-[38px] w-full justify-start ${
           isDarkMode ? 'bg-gray-800/80 border-gray-700 text-white hover:bg-gray-700' : 'bg-white/80 border-gray-200 text-gray-800 hover:bg-gray-100'
         }`}
         title="Page Setup & Backgrounds"
       >
-        <Settings size={18} />
-        <span className="hidden sm:inline">Page Setup</span>
+        <Settings size={17} />
+        <span className="inline">Page Setup</span>
         <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-semibold bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
           {PAGE_SIZES[pageSize]?.label || 'A4'}
         </span>

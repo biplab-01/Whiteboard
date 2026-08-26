@@ -105,25 +105,33 @@ function App() {
       {/* Board is the core canvas taking full screen */}
       <Board />
 
-      {/* Top Left Controls: Library, Page Setup, Export */}
-      <div className="fixed top-6 left-6 z-30 flex items-center gap-2.5 flex-nowrap">
-        <button 
-          onClick={() => {
-            window.dispatchEvent(new CustomEvent('save-canvas-state'));
-            setTimeout(() => {
-              closeNotebook();
-            }, 30);
-          }}
-          className={`px-3.5 py-2.5 rounded-xl shadow-md border backdrop-blur-md transition-all flex items-center gap-2 text-sm font-medium ${
-            isDarkMode ? 'bg-gray-800/80 border-gray-700 text-gray-200 hover:bg-gray-700' : 'bg-white/80 border-gray-200 text-gray-700 hover:bg-gray-50'
-          }`}
-          title="Back to Library"
-        >
-          <ArrowLeft size={18} /> <span className="pr-0.5">Library</span>
-        </button>
+      {/* Top Left Controls: Stacked Library + Export (Column 1) & Page Setup + Rename (Column 2) */}
+      <div className="fixed top-5 left-5 z-30 flex items-start gap-2.5">
+        {/* Column 1: Library (Top) & Export (Beneath) */}
+        <div className="flex flex-col gap-2">
+          <button 
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent('save-canvas-state'));
+              setTimeout(() => {
+                closeNotebook();
+              }, 30);
+            }}
+            className={`px-3.5 py-2 rounded-xl shadow-md border backdrop-blur-md transition-all flex items-center gap-2 text-sm font-medium h-[38px] ${
+              isDarkMode ? 'bg-gray-800/80 border-gray-700 text-gray-200 hover:bg-gray-700' : 'bg-white/80 border-gray-200 text-gray-700 hover:bg-gray-50'
+            }`}
+            title="Back to Library"
+          >
+            <ArrowLeft size={17} /> <span className="pr-0.5">Library</span>
+          </button>
 
-        <BackgroundSettings />
-        <ExportModal />
+          <ExportModal />
+        </div>
+
+        {/* Column 2: Page Setup (Top) & Rename Notebook (Beneath) */}
+        <div className="flex flex-col gap-2">
+          <BackgroundSettings />
+          <NotebookTitle />
+        </div>
       </div>
 
       {/* UI Overlays */}
@@ -133,9 +141,6 @@ function App() {
       <TextPropertiesPanel />
       <ZoomControls />
       <GraphingCalculator isOpen={showCalculator} onClose={() => setShowCalculator(false)} />
-
-      {/* Top Center: Notebook Title Editor */}
-      <NotebookTitle />
 
       {/* Theme Toggle */}
       <button 

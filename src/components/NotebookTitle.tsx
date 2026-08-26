@@ -32,8 +32,8 @@ export const NotebookTitle: React.FC = () => {
   };
 
   return (
-    <div className="fixed top-6 left-1/2 transform -translate-x-1/2 z-20">
-      <div className={`px-3 py-1.5 rounded-xl shadow-md border backdrop-blur-md transition-all flex items-center gap-2 ${
+    <div className="relative">
+      <div className={`px-3 py-2 rounded-xl shadow-md border backdrop-blur-md transition-all flex items-center gap-2 h-[38px] ${
         isDarkMode ? 'bg-gray-800/80 border-gray-700 text-white' : 'bg-white/80 border-gray-200 text-gray-800'
       }`}>
         <BookOpen size={16} className="text-indigo-400 shrink-0" />
@@ -53,7 +53,7 @@ export const NotebookTitle: React.FC = () => {
                 }
               }}
               onBlur={handleSave}
-              className={`text-xs font-semibold px-2 py-0.5 rounded-md border focus:outline-none ring-1 ring-indigo-500 w-44 md:w-60 ${
+              className={`text-xs font-semibold px-2 py-0.5 rounded-md border focus:outline-none ring-1 ring-indigo-500 w-36 sm:w-44 ${
                 isDarkMode ? 'bg-gray-900 border-indigo-500 text-white' : 'bg-white border-indigo-500 text-gray-900'
               }`}
               placeholder="Notebook title..."
@@ -69,13 +69,13 @@ export const NotebookTitle: React.FC = () => {
         ) : (
           <button
             onClick={() => setIsEditing(true)}
-            className="group flex items-center gap-2 hover:text-indigo-400 transition-colors max-w-[200px] md:max-w-[320px]"
+            className="group flex items-center gap-1.5 hover:text-indigo-400 transition-colors max-w-[130px] sm:max-w-[170px]"
             title="Click to Rename Notebook"
           >
-            <span className="font-semibold text-xs md:text-sm truncate">
+            <span className="font-semibold text-xs truncate">
               {currentTitle}
             </span>
-            <Edit2 size={13} className="opacity-40 group-hover:opacity-100 text-indigo-400 transition-opacity shrink-0" />
+            <Edit2 size={12} className="opacity-50 group-hover:opacity-100 text-indigo-400 transition-opacity shrink-0" />
           </button>
         )}
       </div>
