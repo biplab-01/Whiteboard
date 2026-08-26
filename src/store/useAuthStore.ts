@@ -48,21 +48,28 @@ export const useAuthStore = create<AuthState>((set) => ({
       
       if (session?.user) {
         set({ session, user: session.user, loading: false });
+        useBoardStore.setState({ activeUserId: session.user.id });
       } else {
-        set({ user: getGuestUser(), session: null, loading: false });
+        const guest = getGuestUser();
+        set({ user: guest, session: null, loading: false });
+        useBoardStore.setState({ activeUserId: guest.id });
       }
     } catch (err) {
       console.warn('Supabase auth session error:', err);
-      set({ user: getGuestUser(), session: null, loading: false });
+      const guest = getGuestUser();
+      set({ user: guest, session: null, loading: false });
+      useBoardStore.setState({ activeUserId: guest.id });
     }
 
     try {
       supabase.auth.onAuthStateChange((_event, session) => {
         if (session?.user) {
           set({ session, user: session.user, loading: false });
+          useBoardStore.setState({ activeUserId: session.user.id });
         } else {
           const guest = getGuestUser();
           set({ session: null, user: guest, loading: false });
+          useBoardStore.setState({ activeUserId: guest.id });
         }
       });
     } catch (e) {

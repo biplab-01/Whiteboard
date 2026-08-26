@@ -481,7 +481,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     };
 
     const updatedNotebooks = [newNotebook, ...get().notebooks];
-    set({ notebooks: updatedNotebooks });
+    set({ notebooks: updatedNotebooks, activeUserId: userId });
 
     const notebooksKey = getUserStorageKey(userId, STORAGE_KEYS.NOTEBOOKS);
     await setIdbItem(notebooksKey, updatedNotebooks);
@@ -553,7 +553,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     };
 
     const updatedNotebooks = [newNotebook, ...get().notebooks];
-    set({ notebooks: updatedNotebooks });
+    set({ notebooks: updatedNotebooks, activeUserId: userId });
 
     const notebooksKey = getUserStorageKey(userId, STORAGE_KEYS.NOTEBOOKS);
     await setIdbItem(notebooksKey, updatedNotebooks);
@@ -694,11 +694,21 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     }
   },
 
-  openNotebook: async (id: string) => {
-    const { activeUserId } = get();
-    const pagesKey = getUserStorageKey(activeUserId, STORAGE_KEYS.PAGES);
+  openNotebook: async (id: string, customUserId?: string) => {
+    const currentUserId = customUserId || get().activeUserId || localStorage.getItem('nova_guest_id') || 'guest';
+    const isAuthUser = isValidUUID(currentUserId);
+    const pagesKey = getUserStorageKey(currentUserId, STORAGE_KEYS.PAGES);
 
-    // Step 1: Instant local render from IndexedDB cache (0ms delay)
+    // CRITICAL: Immediately clear stale pages and lock on new notebook ID to prevent any visual or data cross-contamination
+    set({
+      activeNotebookId: id,
+      activeUserId: currentUserId,
+      pages: [],
+      currentPageId: null,
+      loading: true,
+    });
+
+    // Step 1: Instant local render from IndexedDB cache
     const cachedAllPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
     let localPages = cachedAllPages.filter((p) => p.notebook_id === id).sort((a, b) => a.order_index - b.order_index);
 
@@ -707,7 +717,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const bg = extractBgSettingsFromPage(firstPage);
 
       set({
-        activeNotebookId: id,
         pages: localPages,
         currentPageId: firstPage.id,
         bgType: bg.bgType,
@@ -718,32 +727,32 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         pageOrientation: bg.pageOrientation || 'portrait',
         loading: false,
       });
-    } else {
-      set({ activeNotebookId: id, loading: true });
+      return;
     }
 
-    // Step 2: Query authoritative pages from Supabase
-    if (isValidUUID(id)) {
+    // Step 2: Query authoritative pages from Supabase only if not found locally
+    if (isValidUUID(id) && isAuthUser) {
       try {
         const res = await supabase.from('pages').select('*').eq('notebook_id', id).order('order_index', { ascending: true });
         const remotePages = res.data || [];
 
         if (remotePages.length > 0) {
-          // Update store with remote authoritative pages
-          const firstRemotePage = remotePages[0];
-          const bg = extractBgSettingsFromPage(firstRemotePage);
+          if (get().activeNotebookId === id) {
+            const firstRemotePage = remotePages[0];
+            const bg = extractBgSettingsFromPage(firstRemotePage);
 
-          set({
-            pages: remotePages,
-            currentPageId: firstRemotePage.id,
-            bgType: bg.bgType,
-            bgColor: bg.bgColor,
-            isRuled: bg.isRuled,
-            ruleColor: bg.ruleColor,
-            pageSize: bg.pageSize || 'a4',
-            pageOrientation: bg.pageOrientation || 'portrait',
-            loading: false,
-          });
+            set({
+              pages: remotePages,
+              currentPageId: firstRemotePage.id,
+              bgType: bg.bgType,
+              bgColor: bg.bgColor,
+              isRuled: bg.isRuled,
+              ruleColor: bg.ruleColor,
+              pageSize: bg.pageSize || 'a4',
+              pageOrientation: bg.pageOrientation || 'portrait',
+              loading: false,
+            });
+          }
 
           // Sync user-scoped IDB cache
           const freshAllPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
@@ -756,9 +765,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       }
     }
 
-    // Step 3: If no pages exist at all, create default Page 1
-    if (get().pages.length === 0) {
-      const notebook = get().notebooks.find((n) => n.id === id);
+    // Step 3: If no pages exist at all for this notebook (brand new notebook or offline), create default Page 1
+    if (get().activeNotebookId === id && get().pages.length === 0) {
       const newPageId = generateUUID();
       const now = new Date().toISOString();
       const defaultBg = { ...DEFAULT_BG_SETTINGS };
@@ -766,7 +774,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const newPage: PageRow = {
         id: newPageId,
         notebook_id: id,
-        user_id: notebook?.user_id || 'guest',
+        user_id: currentUserId,
         name: 'Page 1',
         order_index: 0,
         canvas_data: {
@@ -779,7 +787,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       };
 
       set({
-        activeNotebookId: id,
         pages: [newPage],
         currentPageId: newPageId,
         bgType: defaultBg.bgType,
@@ -795,12 +802,12 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const otherPages = freshAllPages.filter((p) => p.notebook_id !== id);
       await setIdbItem(pagesKey, [...otherPages, newPage]);
 
-      if (notebook?.user_id && isValidUUID(notebook.user_id)) {
+      if (isAuthUser) {
         try {
           await supabase.from('pages').insert({
             id: newPageId,
             notebook_id: id,
-            user_id: notebook.user_id,
+            user_id: currentUserId,
             name: 'Page 1',
             order_index: 0,
             canvas_data: newPage.canvas_data,
@@ -817,7 +824,12 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 
   closeNotebook: () => {
-    set({ activeNotebookId: null, pages: [], currentPageId: null });
+    // Clear any pending debounced timers
+    Object.keys(pageSaveTimers).forEach((key) => {
+      clearTimeout(pageSaveTimers[key]);
+      delete pageSaveTimers[key];
+    });
+    set({ activeNotebookId: null, pages: [], currentPageId: null, loading: false });
   },
 
   // Realtime Handlers for Cloud Events
@@ -1066,28 +1078,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       if (pToAdd) updatedAllPages.push(pToAdd);
     }
     await setIdbItem(pagesKey, updatedAllPages);
-
-    // Debounce cloud write (500ms) to ensure smooth drawing without network saturation
-    if (isValidUUID(id) && isValidUUID(activeUserId)) {
-      if (pageSaveTimers[id]) {
-        clearTimeout(pageSaveTimers[id]);
-      }
-      set({ isSyncing: true, syncStatusText: 'Saving...' });
-      pageSaveTimers[id] = setTimeout(async () => {
-        try {
-          await supabase.from('pages').update({ canvas_data: formattedData, updated_at: now }).eq('id', id);
-          set({ isSyncing: false, syncStatusText: 'Saved' });
-          setTimeout(() => {
-            if (get().syncStatusText === 'Saved') {
-              set({ syncStatusText: null });
-            }
-          }, 2000);
-        } catch (err) {
-          console.warn('Supabase updatePageData debounced error:', err);
-          set({ isSyncing: false, syncStatusText: null });
-        }
-      }, 500);
-    }
   },
 
   importPdfPages: async (pdfPages: { canvasData: string; name: string }[], afterPageId: string | null, userId: string) => {

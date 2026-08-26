@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useAuthStore } from './store/useAuthStore';
 import { useBoardStore } from './store/useBoardStore';
-import { useRealtimeSync } from './hooks/useRealtimeSync';
 import { Auth } from './components/Auth';
 import { Dashboard } from './components/Dashboard/Dashboard';
 import { Board } from './components/Board';
@@ -20,9 +19,6 @@ function App() {
   const { loading, initialize, showAuthModal, setShowAuthModal } = useAuthStore();
   const { activeNotebookId, closeNotebook, isDarkMode, toggleTheme, setCurrentTool } = useBoardStore();
   const [showCalculator, setShowCalculator] = useState(false);
-
-  // Initialize Realtime Multi-Device Sync Subscriptions
-  useRealtimeSync();
 
 
   useEffect(() => {
@@ -121,34 +117,37 @@ function App() {
       {/* Board is the core canvas taking full screen */}
       <Board />
 
+      {/* Top Left Controls: Library, Page Setup, Export */}
+      <div className="fixed top-6 left-6 z-30 flex items-center gap-2.5 flex-nowrap">
+        <button 
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent('save-canvas-state'));
+            setTimeout(() => {
+              closeNotebook();
+            }, 30);
+          }}
+          className={`px-3.5 py-2.5 rounded-xl shadow-md border backdrop-blur-md transition-all flex items-center gap-2 text-sm font-medium ${
+            isDarkMode ? 'bg-gray-800/80 border-gray-700 text-gray-200 hover:bg-gray-700' : 'bg-white/80 border-gray-200 text-gray-700 hover:bg-gray-50'
+          }`}
+          title="Back to Library"
+        >
+          <ArrowLeft size={18} /> <span className="pr-0.5">Library</span>
+        </button>
+
+        <BackgroundSettings />
+        <ExportModal />
+      </div>
+
       {/* UI Overlays */}
-      <BackgroundSettings />
       <PageManager />
       <Toolbar />
       <PropertiesPanel />
       <TextPropertiesPanel />
       <ZoomControls />
-      <ExportModal />
       <GraphingCalculator isOpen={showCalculator} onClose={() => setShowCalculator(false)} />
 
       {/* Top Center: Notebook Title Editor */}
       <NotebookTitle />
-
-      {/* Back to Dashboard Button */}
-      <button 
-        onClick={() => {
-          window.dispatchEvent(new CustomEvent('save-canvas-state'));
-          setTimeout(() => {
-            closeNotebook();
-          }, 30);
-        }}
-        className={`fixed top-6 left-6 px-3.5 py-2.5 rounded-xl shadow-md border backdrop-blur-md transition-all z-20 flex items-center gap-2 text-sm font-medium ${
-          isDarkMode ? 'bg-gray-800/80 border-gray-700 text-gray-200 hover:bg-gray-700' : 'bg-white/80 border-gray-200 text-gray-700 hover:bg-gray-50'
-        }`}
-        title="Back to Library"
-      >
-        <ArrowLeft size={18} /> <span className="pr-0.5">Library</span>
-      </button>
 
       {/* Theme Toggle */}
       <button 

@@ -19,12 +19,25 @@ export const BackgroundSettings: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'size' | 'solid' | 'gradient' | 'ruled'>('size');
   const [nameInput, setNameInput] = useState(activeNotebook?.name || 'Untitled Notebook');
+  const containerRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     if (activeNotebook?.name) {
       setNameInput(activeNotebook.name);
     }
   }, [activeNotebook?.name]);
+
+  React.useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    if (isOpen) {
+      window.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => window.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
 
   const handleNameChange = (val: string) => {
     setNameInput(val);
@@ -62,12 +75,13 @@ export const BackgroundSettings: React.FC = () => {
   const pageEntries = Object.entries(PAGE_SIZES) as [PageSizeType, (typeof PAGE_SIZES)[PageSizeType]][];
 
   return (
-    <div className="fixed top-6 left-36 z-20">
+    <div ref={containerRef} className="relative">
       <button 
         onClick={() => setIsOpen(!isOpen)}
         className={`px-3.5 py-2.5 rounded-xl shadow-md border backdrop-blur-md transition-all flex items-center gap-2 font-medium text-sm ${
           isDarkMode ? 'bg-gray-800/80 border-gray-700 text-white hover:bg-gray-700' : 'bg-white/80 border-gray-200 text-gray-800 hover:bg-gray-100'
         }`}
+        title="Page Setup & Backgrounds"
       >
         <Settings size={18} />
         <span className="hidden sm:inline">Page Setup</span>
@@ -77,7 +91,7 @@ export const BackgroundSettings: React.FC = () => {
       </button>
 
       {isOpen && (
-        <div className={`mt-2 p-4 rounded-2xl shadow-2xl border w-84 max-h-[82vh] overflow-y-auto custom-scrollbar backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150 ${
+        <div className={`absolute top-full left-0 mt-2 p-4 rounded-2xl shadow-2xl border w-84 max-h-[82vh] overflow-y-auto custom-scrollbar backdrop-blur-xl z-50 animate-in fade-in zoom-in-95 duration-150 ${
           isDarkMode ? 'bg-[#1a1c29]/95 border-gray-700 text-white' : 'bg-white/95 border-gray-200 text-gray-800'
         }`}>
           <div className="flex justify-between items-center mb-3">
