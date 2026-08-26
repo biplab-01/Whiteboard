@@ -9,7 +9,7 @@ interface SyncStatusBadgeProps {
 }
 
 export const SyncStatusBadge: React.FC<SyncStatusBadgeProps> = ({ variant = 'full', className = '' }) => {
-  const { isSyncing, syncStatusText, activeUserId, fetchLibrary, activeNotebookId, openNotebook, isDarkMode } = useBoardStore();
+  const { isSyncing, syncStatusText, activeUserId, syncAllNotebooks, isDarkMode } = useBoardStore();
   const { user, setShowAuthModal } = useAuthStore();
 
   const isAuth = user?.id && isValidUUID(user.id) && !user.is_anonymous;
@@ -20,10 +20,7 @@ export const SyncStatusBadge: React.FC<SyncStatusBadgeProps> = ({ variant = 'ful
       return;
     }
     if (activeUserId) {
-      if (activeNotebookId) {
-        await openNotebook(activeNotebookId);
-      }
-      await fetchLibrary(activeUserId);
+      await syncAllNotebooks(activeUserId);
     }
   };
 

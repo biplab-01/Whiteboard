@@ -260,118 +260,15 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   pageOrientation: DEFAULT_BG_SETTINGS.pageOrientation || 'portrait',
 
   fetchLibrary: async (userId: string) => {
-    const isAuthUser = isValidUUID(userId);
-    set({ activeUserId: userId, isSyncing: true, syncStatusText: 'Syncing with cloud...' });
+    set({ activeUserId: userId, isSyncing: false, syncStatusText: null });
 
     const foldersKey = getUserStorageKey(userId, STORAGE_KEYS.FOLDERS);
     const notebooksKey = getUserStorageKey(userId, STORAGE_KEYS.NOTEBOOKS);
-    const pagesKey = getUserStorageKey(userId, STORAGE_KEYS.PAGES);
 
-    // Step 1: Immediate local state hydration from user-scoped cache
+    // Immediate local state hydration from user-scoped cache
     const cachedFolders = (await getIdbItem<FolderRow[]>(foldersKey, [])) || [];
     const cachedNotebooks = (await getIdbItem<NotebookRow[]>(notebooksKey, [])) || [];
-    if (cachedFolders.length > 0 || cachedNotebooks.length > 0) {
-      set({ folders: cachedFolders, notebooks: cachedNotebooks });
-    }
-
-    if (!isAuthUser) {
-      set({ isSyncing: false, syncStatusText: null });
-      return;
-    }
-
-    try {
-      // Step 2: Fetch authoritative remote folders and notebooks from Supabase
-      const [foldersRes, notebooksRes] = await Promise.all([
-        supabase.from('folders').select('*').eq('user_id', userId).order('created_at', { ascending: true }),
-        supabase.from('notebooks').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
-      ]);
-
-      let remoteFolders = foldersRes.data || [];
-      let remoteNotebooks = notebooksRes.data || [];
-
-      // Case A: First-Time User Onboarding / Migration (Remote is empty, but local has previous work)
-      if (remoteNotebooks.length === 0 && cachedNotebooks.length > 0) {
-        // Upload initial cached folders
-        for (const cf of cachedFolders) {
-          const { data: newF } = await supabase.from('folders').insert({
-            id: cf.id,
-            name: cf.name,
-            user_id: userId,
-            created_at: cf.created_at || new Date().toISOString(),
-          }).select().single();
-          if (newF) remoteFolders.push(newF);
-        }
-
-        // Upload initial cached notebooks
-        for (const cnb of cachedNotebooks) {
-          const { error: nbErr } = await supabase.from('notebooks').insert({
-            id: cnb.id,
-            name: cnb.name,
-            folder_id: cnb.folder_id,
-            user_id: userId,
-            created_at: cnb.created_at || new Date().toISOString(),
-            updated_at: cnb.updated_at || new Date().toISOString(),
-          });
-          if (!nbErr) remoteNotebooks.push(cnb);
-        }
-
-        // Upload initial cached pages
-        const cachedPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
-        const validPages = cachedPages.filter((p) => p.notebook_id && isValidUUID(p.notebook_id));
-        if (validPages.length > 0) {
-          await Promise.all(
-            validPages.map((p) => {
-              let formattedData = p.canvas_data;
-              if (typeof formattedData === 'string') {
-                try {
-                  formattedData = JSON.parse(formattedData);
-                } catch {}
-              }
-              return supabase.from('pages').upsert({
-                id: p.id,
-                notebook_id: p.notebook_id,
-                user_id: userId,
-                name: p.name,
-                order_index: p.order_index,
-                canvas_data: formattedData,
-                created_at: p.created_at || new Date().toISOString(),
-                updated_at: p.updated_at || new Date().toISOString(),
-              });
-            })
-          );
-        }
-      }
-
-      // Case B: Remote Authority & Ghost File Purging
-      // Remote Supabase is the single source of truth!
-      const remoteNotebookIdSet = new Set(remoteNotebooks.map((n) => n.id));
-      const cachedPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
-      const prunedPages = cachedPages.filter((p) => remoteNotebookIdSet.has(p.notebook_id));
-
-      set({
-        folders: remoteFolders,
-        notebooks: remoteNotebooks,
-        isSyncing: false,
-        syncStatusText: 'Synced with cloud',
-      });
-
-      // Update user-scoped cache
-      await Promise.all([
-        setIdbItem(foldersKey, remoteFolders),
-        setIdbItem(notebooksKey, remoteNotebooks),
-        setIdbItem(pagesKey, prunedPages),
-      ]);
-
-      setTimeout(() => {
-        set({ syncStatusText: null });
-      }, 2500);
-    } catch (err) {
-      console.warn('Supabase fetchLibrary sync error:', err);
-      set({ isSyncing: false, syncStatusText: 'Sync offline (cached)' });
-      setTimeout(() => {
-        set({ syncStatusText: null });
-      }, 3000);
-    }
+    set({ folders: cachedFolders, notebooks: cachedNotebooks });
   },
 
   syncAllNotebooks: async (userId: string) => {
@@ -389,6 +286,58 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const notebooksKey = getUserStorageKey(userId, STORAGE_KEYS.NOTEBOOKS);
       const pagesKey = getUserStorageKey(userId, STORAGE_KEYS.PAGES);
 
+      const localFolders = (await getIdbItem<FolderRow[]>(foldersKey, [])) || [];
+      const localNotebooks = (await getIdbItem<NotebookRow[]>(notebooksKey, [])) || [];
+      const localPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
+
+      // 1. Push local folders to Supabase
+      for (const f of localFolders) {
+        await supabase.from('folders').upsert({
+          id: f.id,
+          name: f.name,
+          user_id: userId,
+          created_at: f.created_at || new Date().toISOString(),
+        });
+      }
+
+      // 2. Push local notebooks to Supabase
+      for (const nb of localNotebooks) {
+        await supabase.from('notebooks').upsert({
+          id: nb.id,
+          name: nb.name,
+          folder_id: nb.folder_id,
+          user_id: userId,
+          created_at: nb.created_at || new Date().toISOString(),
+          updated_at: nb.updated_at || new Date().toISOString(),
+        });
+      }
+
+      // 3. Push local pages to Supabase
+      const validPages = localPages.filter((p) => p.notebook_id && isValidUUID(p.notebook_id));
+      if (validPages.length > 0) {
+        await Promise.all(
+          validPages.map((p) => {
+            let formattedData = p.canvas_data;
+            if (typeof formattedData === 'string') {
+              try {
+                formattedData = JSON.parse(formattedData);
+              } catch {}
+            }
+            return supabase.from('pages').upsert({
+              id: p.id,
+              notebook_id: p.notebook_id,
+              user_id: userId,
+              name: p.name,
+              order_index: p.order_index,
+              canvas_data: formattedData,
+              created_at: p.created_at || new Date().toISOString(),
+              updated_at: p.updated_at || new Date().toISOString(),
+            });
+          })
+        );
+      }
+
+      // 4. Fetch all remote records from Supabase
       const [foldersRes, notebooksRes, pagesRes] = await Promise.all([
         supabase.from('folders').select('*').eq('user_id', userId).order('created_at', { ascending: true }),
         supabase.from('notebooks').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
@@ -399,17 +348,33 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const remoteNotebooks = notebooksRes.data || [];
       const remotePages = pagesRes.data || [];
 
+      // Merge remote and local maps
+      const foldersMap = new Map<string, FolderRow>();
+      remoteFolders.forEach((f) => foldersMap.set(f.id, f));
+      localFolders.forEach((f) => { if (!foldersMap.has(f.id)) foldersMap.set(f.id, f); });
+      const mergedFolders = Array.from(foldersMap.values());
+
+      const notebooksMap = new Map<string, NotebookRow>();
+      remoteNotebooks.forEach((n) => notebooksMap.set(n.id, n));
+      localNotebooks.forEach((n) => { if (!notebooksMap.has(n.id)) notebooksMap.set(n.id, n); });
+      const mergedNotebooks = Array.from(notebooksMap.values());
+
+      const pagesMap = new Map<string, PageRow>();
+      remotePages.forEach((p) => pagesMap.set(p.id, p));
+      localPages.forEach((p) => { if (!pagesMap.has(p.id)) pagesMap.set(p.id, p); });
+      const mergedPages = Array.from(pagesMap.values());
+
       set({
-        folders: remoteFolders,
-        notebooks: remoteNotebooks,
+        folders: mergedFolders,
+        notebooks: mergedNotebooks,
         isSyncing: false,
-        syncStatusText: `Synced all ${remoteNotebooks.length} notebooks`,
+        syncStatusText: `Synced all ${mergedNotebooks.length} notebooks`,
       });
 
       await Promise.all([
-        setIdbItem(foldersKey, remoteFolders),
-        setIdbItem(notebooksKey, remoteNotebooks),
-        setIdbItem(pagesKey, remotePages),
+        setIdbItem(foldersKey, mergedFolders),
+        setIdbItem(notebooksKey, mergedNotebooks),
+        setIdbItem(pagesKey, mergedPages),
       ]);
 
       setTimeout(() => set({ syncStatusText: null }), 3000);
@@ -435,14 +400,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
     const foldersKey = getUserStorageKey(userId, STORAGE_KEYS.FOLDERS);
     await setIdbItem(foldersKey, updatedFolders);
-
-    if (isValidUUID(userId)) {
-      try {
-        await supabase.from('folders').insert({ id: folderId, name: newFolder.name, user_id: userId });
-      } catch (err) {
-        console.warn('Supabase createFolder error:', err);
-      }
-    }
   },
 
   deleteFolder: async (folderId: string) => {
@@ -455,15 +412,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const foldersKey = getUserStorageKey(activeUserId, STORAGE_KEYS.FOLDERS);
     const notebooksKey = getUserStorageKey(activeUserId, STORAGE_KEYS.NOTEBOOKS);
     await Promise.all([setIdbItem(foldersKey, updatedFolders), setIdbItem(notebooksKey, updatedNotebooks)]);
-
-    if (isValidUUID(folderId)) {
-      try {
-        await supabase.from('notebooks').update({ folder_id: null }).eq('folder_id', folderId);
-        await supabase.from('folders').delete().eq('id', folderId);
-      } catch (err) {
-        console.warn('Supabase deleteFolder error:', err);
-      }
-    }
   },
 
   createNotebook: async (name: string, folderId: string | null, userId: string) => {
@@ -507,33 +455,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const pagesKey = getUserStorageKey(userId, STORAGE_KEYS.PAGES);
     const allPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
     await setIdbItem(pagesKey, [...allPages, defaultPage]);
-
-    // Insert into Supabase
-    if (isValidUUID(userId)) {
-      try {
-        await supabase.from('notebooks').insert({
-          id: notebookId,
-          name: newNotebook.name,
-          folder_id: validFolderId,
-          user_id: userId,
-          created_at: now,
-          updated_at: now,
-        });
-
-        await supabase.from('pages').insert({
-          id: defaultPageId,
-          notebook_id: notebookId,
-          user_id: userId,
-          name: 'Page 1',
-          order_index: 0,
-          canvas_data: defaultPage.canvas_data,
-          created_at: now,
-          updated_at: now,
-        });
-      } catch (err) {
-        console.warn('Supabase createNotebook error:', err);
-      }
-    }
 
     return notebookId;
   },
@@ -597,34 +518,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const allPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
     await setIdbItem(pagesKey, [...allPages, ...createdPages]);
 
-    if (isValidUUID(userId)) {
-      try {
-        await supabase.from('notebooks').insert({
-          id: notebookId,
-          name: newNotebook.name,
-          folder_id: validFolderId,
-          user_id: userId,
-          created_at: now,
-          updated_at: now,
-        });
-
-        for (const p of createdPages) {
-          await supabase.from('pages').insert({
-            id: p.id,
-            notebook_id: notebookId,
-            user_id: userId,
-            name: p.name,
-            order_index: p.order_index,
-            canvas_data: p.canvas_data,
-            created_at: now,
-            updated_at: now,
-          });
-        }
-      } catch (err) {
-        console.warn('Supabase createNotebookWithPages error:', err);
-      }
-    }
-
     return notebookId;
   },
 
@@ -638,14 +531,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
     const notebooksKey = getUserStorageKey(activeUserId, STORAGE_KEYS.NOTEBOOKS);
     await setIdbItem(notebooksKey, updated);
-
-    if (isValidUUID(id)) {
-      try {
-        await supabase.from('notebooks').update({ name: cleanName, updated_at: now }).eq('id', id);
-      } catch (err) {
-        console.warn('Supabase renameNotebook error:', err);
-      }
-    }
   },
 
   deleteNotebook: async (id: string) => {
@@ -664,15 +549,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const prunedPages = allPages.filter((p) => p.notebook_id !== id);
 
     await Promise.all([setIdbItem(notebooksKey, updated), setIdbItem(pagesKey, prunedPages)]);
-
-    if (isValidUUID(id)) {
-      try {
-        await supabase.from('pages').delete().eq('notebook_id', id);
-        await supabase.from('notebooks').delete().eq('id', id);
-      } catch (err) {
-        console.warn('Supabase deleteNotebook error:', err);
-      }
-    }
   },
 
   moveNotebook: async (notebookId: string, folderId: string | null) => {
@@ -684,14 +560,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
     const notebooksKey = getUserStorageKey(activeUserId, STORAGE_KEYS.NOTEBOOKS);
     await setIdbItem(notebooksKey, updated);
-
-    if (isValidUUID(notebookId)) {
-      try {
-        await supabase.from('notebooks').update({ folder_id: validFolderId }).eq('id', notebookId);
-      } catch (err) {
-        console.warn('Supabase moveNotebook error:', err);
-      }
-    }
   },
 
   openNotebook: async (id: string, customUserId?: string) => {
@@ -984,23 +852,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const pagesKey = getUserStorageKey(userId, STORAGE_KEYS.PAGES);
     const allPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
     await setIdbItem(pagesKey, [...allPages, newPage]);
-
-    if (isValidUUID(userId)) {
-      try {
-        await supabase.from('pages').insert({
-          id: newPageId,
-          notebook_id: activeNotebookId,
-          user_id: userId,
-          name: newPage.name,
-          order_index: newPage.order_index,
-          canvas_data: newPage.canvas_data,
-          created_at: now,
-          updated_at: now,
-        });
-      } catch (err) {
-        console.warn('Supabase addPage error:', err);
-      }
-    }
   },
 
   removePage: async (id: string) => {
@@ -1015,14 +866,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const pagesKey = getUserStorageKey(activeUserId, STORAGE_KEYS.PAGES);
     const allPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
     await setIdbItem(pagesKey, allPages.filter((p) => p.id !== id));
-
-    if (isValidUUID(id)) {
-      try {
-        await supabase.from('pages').delete().eq('id', id);
-      } catch (err) {
-        console.warn('Supabase removePage error:', err);
-      }
-    }
   },
 
   switchPage: async (id: string, currentCanvasData?: string) => {
@@ -1150,25 +993,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const allPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
     const otherNotebookPages = allPages.filter((p) => p.notebook_id !== activeNotebookId);
     await setIdbItem(pagesKey, [...otherNotebookPages, ...combined]);
-
-    if (isValidUUID(userId)) {
-      try {
-        for (const p of newCreatedPages) {
-          await supabase.from('pages').insert({
-            id: p.id,
-            notebook_id: activeNotebookId,
-            user_id: userId,
-            name: p.name,
-            order_index: p.order_index,
-            canvas_data: p.canvas_data,
-            created_at: now,
-            updated_at: now,
-          });
-        }
-      } catch (err) {
-        console.warn('Supabase importPdfPages error:', err);
-      }
-    }
   },
 
   setBgType: (type) => {

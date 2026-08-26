@@ -44,6 +44,7 @@ const normalizeTextObject = (obj: fabric.FabricObject) => {
       mb: false,
     });
     textObj.lockScalingFlip = true;
+    textObj.splitByGrapheme = false; // Always wrap full words, not individual characters
 
     const sx = textObj.scaleX ?? 1;
     const sy = textObj.scaleY ?? 1;
@@ -378,20 +379,15 @@ export const Board: React.FC = () => {
     // For the actual canvas background (the infinite space outside page)
     canvas.backgroundColor = isDarkMode ? '#121212' : '#e5e7eb'; 
 
-    // Remove old page background if exists (identified by special name)
+    // Remove old page background and ruled lines if exists
     const oldBgs = canvas.getObjects().filter((o: any) => o.name === 'a4-background' || o.name === 'a4-ruled-line');
     oldBgs.forEach(o => canvas.remove(o));
 
-    // If background is set to none, transparent, or if the page contains an imported PDF document, skip background paper rect
-    const hasPdfDoc = canvas.getObjects().some((o: any) => (o as any).name === 'pdf-page' || (o.type === 'image' && (o as any).src));
-    if (bgType === 'none' || bgColor === 'transparent' || hasPdfDoc) {
-      canvas.requestRenderAll();
-      return;
-    }
-
-    // Create the Page Rect
+    // Determine Page background fill
     let pageBg: string | fabric.Gradient<any> = bgColor;
-    if (bgType === 'gradient') {
+    if (bgType === 'none' || bgColor === 'transparent') {
+      pageBg = isDarkMode ? '#1a1c29' : '#ffffff';
+    } else if (bgType === 'gradient') {
       if (bgColor.includes(',')) {
         const [c1, c2] = bgColor.split(',');
         pageBg = new fabric.Gradient({
@@ -405,6 +401,8 @@ export const Board: React.FC = () => {
       } else {
         pageBg = bgColor;
       }
+    } else {
+      pageBg = bgColor || (isDarkMode ? '#1a1c29' : '#ffffff');
     }
 
     const pageRect: any = new fabric.Rect({
@@ -413,12 +411,15 @@ export const Board: React.FC = () => {
       width: pageW,
       height: pageH,
       fill: pageBg,
+      stroke: isDarkMode ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
+      strokeWidth: 1,
+      strokeUniform: true,
       selectable: false,
       evented: false, // Don't block interactions
       excludeFromExport: true,
       shadow: new fabric.Shadow({
-        color: isDarkMode ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.12)',
-        blur: 16,
+        color: isDarkMode ? 'rgba(0,0,0,0.7)' : 'rgba(0,0,0,0.14)',
+        blur: 24,
         offsetX: 0,
         offsetY: 8
       })
@@ -431,17 +432,23 @@ export const Board: React.FC = () => {
     // Draw Ruled Lines
     if (isRuled) {
       const lineSpacing = 30; // standard ruled line spacing
+      const ruledLines: fabric.Line[] = [];
       for (let i = lineSpacing; i < pageH; i += lineSpacing) {
         const line: any = new fabric.Line([x, y + i, x + pageW, y + i], {
-          stroke: ruleColor,
+          stroke: ruleColor || (isDarkMode ? '#374151' : '#cbd5e1'),
           strokeWidth: 1,
           selectable: false,
           evented: false,
-          opacity: 0.5
+          opacity: 0.5,
+          excludeFromExport: true,
         });
         line.name = 'a4-ruled-line';
+        ruledLines.push(line);
         canvas.add(line);
       }
+      // Send lines to back right above pageRect (lines first, then pageRect to very back)
+      ruledLines.forEach(l => canvas.sendObjectToBack(l));
+      canvas.sendObjectToBack(pageRect);
     }
 
     canvas.requestRenderAll();
@@ -2027,7 +2034,7 @@ export const Board: React.FC = () => {
             cornerColor: '#6366f1',
             cornerSize: 8,
             padding: 6,
-            splitByGrapheme: true,
+            splitByGrapheme: false, // Wrap by whole words on spaces
             cursorColor: textColor,
             editable: true,
             lockUniScaling: true,
