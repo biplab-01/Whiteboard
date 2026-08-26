@@ -1631,29 +1631,16 @@ export const Board: React.FC = () => {
           : pageToLoad.canvas_data;
 
         canvas.loadFromJSON(parsed).then(() => {
-          const { width: pageW, height: pageH } = getPageDimensions(pageSize, pageOrientation);
-          const pageCenterX = (canvas.width! - pageW) / 2;
-          const pageCenterY = Math.max(50, (canvas.height! - pageH) / 2);
-
-          const userObjects = canvas.getObjects().filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
-          if (userObjects.length > 0) {
-            const minX = Math.min(...userObjects.map(o => o.left || 0));
-            if (minX < 150 && pageCenterX > 200) {
-              const shiftX = pageCenterX;
-              const shiftY = pageCenterY > 50 ? pageCenterY - 20 : 0;
-              userObjects.forEach(obj => {
-                obj.set({
-                  left: (obj.left || 0) + shiftX,
-                  top: (obj.top || 0) + shiftY,
-                });
-                obj.setCoords();
-              });
-            }
-          }
-
+          const liveTool = useBoardStore.getState().currentTool;
+          const isSelect = liveTool === 'select';
           canvas.forEachObject((obj) => {
-            if (obj.type === 'textbox' || obj.type === 'i-text') {
-              normalizeTextObject(obj);
+            if ((obj as any).name !== 'a4-background' && (obj as any).name !== 'a4-ruled-line') {
+              obj.selectable = isSelect;
+              obj.evented = true;
+              obj.strokeUniform = true;
+              if (obj.type === 'textbox' || obj.type === 'i-text') {
+                normalizeTextObject(obj);
+              }
             }
           });
           renderBackground(canvas);
@@ -1673,7 +1660,7 @@ export const Board: React.FC = () => {
       canvas.requestRenderAll();
       initPageHistory(currentPageId, getCanvasSnapshot(canvas));
     }
-  }, [currentPageId, renderBackground, initPageHistory, getCanvasSnapshot, pageSize, pageOrientation]);
+  }, [currentPageId, renderBackground, initPageHistory, getCanvasSnapshot]);
 
 
   // Handle Background & Page Dimension changes

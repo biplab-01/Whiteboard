@@ -13,23 +13,19 @@ export const PageManager: React.FC = () => {
 
   const handlePrev = () => {
     if (!isFirst) {
-      window.dispatchEvent(new CustomEvent('save-canvas-state'));
       switchPage(pages[currentIndex - 1].id);
     }
   };
 
   const handleNext = () => {
     if (!isLast) {
-      window.dispatchEvent(new CustomEvent('save-canvas-state'));
       switchPage(pages[currentIndex + 1].id);
     }
   };
 
   const handleAddPage = () => {
-    if (user) {
-      window.dispatchEvent(new CustomEvent('save-canvas-state'));
-      addPage(user.id);
-    }
+    const userId = user?.id || localStorage.getItem('nova_guest_id') || 'guest';
+    addPage(userId);
   };
 
   return (

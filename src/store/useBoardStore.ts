@@ -878,12 +878,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     await setIdbItem(pagesKey, allPages.filter((p) => p.id !== id));
   },
 
-  switchPage: async (id: string, currentCanvasData?: string) => {
-    const { currentPageId, pages } = get();
-    if (currentPageId && currentCanvasData !== undefined && currentCanvasData !== '') {
-      await get().updatePageData(currentPageId, currentCanvasData);
-    }
-
+  switchPage: async (id: string) => {
+    const { pages } = get();
     const targetPage = pages.find((p) => p.id === id);
     const bg = extractBgSettingsFromPage(targetPage);
 
@@ -921,16 +917,29 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
     const now = new Date().toISOString();
     const updatedPages = get().pages.map((p) => (p.id === id ? { ...p, canvas_data: formattedData, updated_at: now } : p));
+    
+    // Instant synchronous in-memory store update (0ms UI latency)
     set({ pages: updatedPages });
 
-    const pagesKey = getUserStorageKey(activeUserId, STORAGE_KEYS.PAGES);
-    const allPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
-    const updatedAllPages = allPages.map((p) => (p.id === id ? { ...p, canvas_data: formattedData, updated_at: now } : p));
-    if (!updatedAllPages.some((p) => p.id === id)) {
-      const pToAdd = updatedPages.find((p) => p.id === id);
-      if (pToAdd) updatedAllPages.push(pToAdd);
+    // Debounce IndexedDB persistent storage write so page transitions are lightning fast
+    if (pageSaveTimers[id]) {
+      clearTimeout(pageSaveTimers[id]);
     }
-    await setIdbItem(pagesKey, updatedAllPages);
+    pageSaveTimers[id] = setTimeout(async () => {
+      delete pageSaveTimers[id];
+      try {
+        const pagesKey = getUserStorageKey(activeUserId, STORAGE_KEYS.PAGES);
+        const allPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
+        const updatedAllPages = allPages.map((p) => (p.id === id ? { ...p, canvas_data: formattedData, updated_at: now } : p));
+        if (!updatedAllPages.some((p) => p.id === id)) {
+          const pToAdd = updatedPages.find((p) => p.id === id);
+          if (pToAdd) updatedAllPages.push(pToAdd);
+        }
+        await setIdbItem(pagesKey, updatedAllPages);
+      } catch (e) {
+        console.warn('Background page save error:', e);
+      }
+    }, 150);
   },
 
   importPdfPages: async (pdfPages: { canvasData: string; name: string }[], afterPageId: string | null, userId: string) => {
