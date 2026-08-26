@@ -494,7 +494,7 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
     };
 
     // -----------------------------------------------------------
-    // IMPLICIT 3D ISOSURFACE RAYMARCHING
+    // IMPLICIT 3D ISOSURFACE VOLUMETRIC CONTOUR MESHING (Fast & Smooth)
     // -----------------------------------------------------------
     if (isImplicitExpression3D(expr3D)) {
       const { fn: implicitFn } = compileImplicit3D(expr3D);
@@ -503,27 +503,6 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
       const radZ = (rotZ * Math.PI) / 180;
       const cosX = Math.cos(radX), sinX = Math.sin(radX);
       const cosZ = Math.cos(radZ), sinZ = Math.sin(radZ);
-
-      const dist = 12.0;
-      const camX = dist * sinZ * cosX;
-      const camY = dist * cosZ * cosX;
-      const camZ = dist * sinX;
-
-      const fLen = Math.hypot(camX, camY, camZ) || 1;
-      const fwX = -camX / fLen;
-      const fwY = -camY / fLen;
-      const fwZ = -camZ / fLen;
-
-      const worldUpX = 0, worldUpY = 0, worldUpZ = 1;
-      let rx = fwY * worldUpZ - fwZ * worldUpY;
-      let ry = fwZ * worldUpX - fwX * worldUpZ;
-      let rz = fwX * worldUpY - fwY * worldUpX;
-      const rLen = Math.hypot(rx, ry, rz) || 1;
-      rx /= rLen; ry /= rLen; rz /= rLen;
-
-      const upX = ry * fwZ - rz * fwY;
-      const upY = rz * fwX - rx * fwZ;
-      const upZ = rx * fwY - ry * fwX;
 
       const project = (x: number, y: number, z: number) => {
         const x1 = x * cosZ - y * sinZ;
@@ -537,210 +516,81 @@ export const GraphingCalculator: React.FC<GraphingCalculatorProps> = ({ isOpen, 
         return { x: screenX, y: screenY, depth: y2 };
       };
 
-      if (!wireframe) {
-        const imgData = ctx.createImageData(width, height);
-        const data = imgData.data;
+      const numSlices = wireframe ? 14 : 26;
+      const zStep = (2 * L) / numSlices;
+      const gridRes = 32;
+      const stepXY = (2 * L) / gridRes;
 
-        const bgR = isDark ? 15 : 255;
-        const bgG = isDark ? 23 : 255;
-        const bgB = isDark ? 42 : 255;
-        const bgA = customBg === 'transparent' ? 0 : 255;
+      interface ContourSegment {
+        p1: { x: number; y: number; depth: number };
+        p2: { x: number; y: number; depth: number };
+        avgDepth: number;
+        normH: number;
+      }
+      const segments: ContourSegment[] = [];
 
-        if (bgA > 0) {
-          for (let i = 0; i < data.length; i += 4) {
-            data[i] = bgR;
-            data[i + 1] = bgG;
-            data[i + 2] = bgB;
-            data[i + 3] = bgA;
+      for (let s = 0; s <= numSlices; s++) {
+        const sliceZ = -L + s * zStep;
+        const sliceVals: number[][] = [];
+        for (let i = 0; i <= gridRes; i++) {
+          sliceVals[i] = [];
+          const x = -L + i * stepXY;
+          for (let j = 0; j <= gridRes; j++) {
+            const y = -L + j * stepXY;
+            let v = implicitFn(x, y, sliceZ);
+            if (isNaN(v) || !isFinite(v)) v = 0;
+            sliceVals[i][j] = v;
           }
         }
 
-        const step = 2; // 2px block rendering for real-time 60fps interaction
-        const scaleFactor = (zoom * 10);
-        const lx = 0.577, ly = -0.577, lz = 0.577;
+        for (let i = 0; i < gridRes; i++) {
+          for (let j = 0; j < gridRes; j++) {
+            const v0 = sliceVals[i][j];
+            const v1 = sliceVals[i + 1][j];
+            const v2 = sliceVals[i + 1][j + 1];
+            const v3 = sliceVals[i][j + 1];
+            let mask = 0;
+            if (v0 > 0) mask |= 1;
+            if (v1 > 0) mask |= 2;
+            if (v2 > 0) mask |= 4;
+            if (v3 > 0) mask |= 8;
+            if (mask === 0 || mask === 15) continue;
 
-        for (let py = 0; py < height; py += step) {
-          const ny = (height / 2 - py) / scaleFactor;
-          for (let px = 0; px < width; px += step) {
-            const nx = (px - width / 2) / scaleFactor;
+            const xA = -L + i * stepXY;
+            const xB = xA + stepXY;
+            const yA = -L + j * stepXY;
+            const yB = yA + stepXY;
+            const lerp3 = (p1: number, p2: number, va: number, vb: number) => p1 + (-va / (vb - va || 1e-6)) * (p2 - p1);
+            const pTop = project(lerp3(xA, xB, v0, v1), yA, sliceZ);
+            const pRight = project(xB, lerp3(yA, yB, v1, v2), sliceZ);
+            const pBottom = project(lerp3(xA, xB, v3, v2), yB, sliceZ);
+            const pLeft = project(xA, lerp3(yA, yB, v0, v3), sliceZ);
 
-            const ox = camX + nx * rx + ny * upX;
-            const oy = camY + nx * ry + ny * upY;
-            const oz = camZ + nx * rz + ny * upZ;
+            let ptA = pLeft, ptB = pTop;
+            if (mask === 2 || mask === 13) { ptA = pTop; ptB = pRight; }
+            else if (mask === 3 || mask === 12) { ptA = pLeft; ptB = pRight; }
+            else if (mask === 4 || mask === 11) { ptA = pRight; ptB = pBottom; }
+            else if (mask === 6 || mask === 9) { ptA = pTop; ptB = pBottom; }
+            else if (mask === 7 || mask === 8) { ptA = pLeft; ptB = pBottom; }
 
-            const dx = fwX;
-            const dy = fwY;
-            const dz = fwZ;
-
-            let prevVal = NaN;
-            let hit = false;
-            let hitT = 0;
-
-            const tStart = dist - L * 1.8;
-            const tEnd = dist + L * 1.8;
-            const raySteps = 42;
-            const rayDt = (tEnd - tStart) / raySteps;
-
-            for (let s = 0; s <= raySteps; s++) {
-              const t = tStart + s * rayDt;
-              const curX = ox + t * dx;
-              const curY = oy + t * dy;
-              const curZ = oz + t * dz;
-
-              if (Math.abs(curX) > L * 1.3 || Math.abs(curY) > L * 1.3 || Math.abs(curZ) > L * 1.3) {
-                prevVal = NaN;
-                continue;
-              }
-
-              const val = implicitFn(curX, curY, curZ);
-              if (isNaN(val) || !isFinite(val)) {
-                prevVal = NaN;
-                continue;
-              }
-
-              if (!isNaN(prevVal) && prevVal * val <= 0) {
-                let tA = t - rayDt;
-                let tB = t;
-                let vA = prevVal;
-                let vB = val;
-                for (let iter = 0; iter < 4; iter++) {
-                  const tMid = Math.abs(vB - vA) > 1e-7 ? (tA * vB - tB * vA) / (vB - vA) : (tA + tB) / 2;
-                  const vMid = implicitFn(ox + tMid * dx, oy + tMid * dy, oz + tMid * dz);
-                  if (isNaN(vMid)) break;
-                  if (vA * vMid <= 0) {
-                    tB = tMid;
-                    vB = vMid;
-                  } else {
-                    tA = tMid;
-                    vA = vMid;
-                  }
-                }
-                hitT = (tA + tB) / 2;
-                hit = true;
-                break;
-              }
-              prevVal = val;
-            }
-
-            if (hit) {
-              const hx = ox + hitT * dx;
-              const hy = oy + hitT * dy;
-              const hz = oz + hitT * dz;
-
-              const eps = 0.005;
-              const nxGrad = (implicitFn(hx + eps, hy, hz) - implicitFn(hx - eps, hy, hz)) / (2 * eps);
-              const nyGrad = (implicitFn(hx, hy + eps, hz) - implicitFn(hx, hy - eps, hz)) / (2 * eps);
-              const nzGrad = (implicitFn(hx, hy, hz + eps) - implicitFn(hx, hy, hz - eps)) / (2 * eps);
-              const nLen = Math.hypot(nxGrad, nyGrad, nzGrad) || 1;
-              let normX = nxGrad / nLen;
-              let normY = nyGrad / nLen;
-              let normZ = nzGrad / nLen;
-
-              if (normX * dx + normY * dy + normZ * dz > 0) {
-                normX = -normX;
-                normY = -normY;
-                normZ = -normZ;
-              }
-
-              const dotL = Math.max(0, normX * lx + normY * ly + normZ * lz);
-              const rfx = 2 * dotL * normX - lx;
-              const rfy = 2 * dotL * normY - ly;
-              const rfz = 2 * dotL * normZ - lz;
-              const dotV = Math.max(0, -(rfx * dx + rfy * dy + rfz * dz));
-              const spec = Math.pow(dotV, 12) * 0.45;
-              const lightFactor = Math.min(1.4, Math.max(0.4, 0.35 + dotL * 0.75 + spec));
-
-              const normH = Math.max(0, Math.min(1, (hz + L * 0.8) / (L * 1.6)));
-              const col = getColor(normH, lightFactor);
-
-              for (let sy = 0; sy < step && py + sy < height; sy++) {
-                for (let sx = 0; sx < step && px + sx < width; sx++) {
-                  const idx = ((py + sy) * width + (px + sx)) * 4;
-                  data[idx] = col.r;
-                  data[idx + 1] = col.g;
-                  data[idx + 2] = col.b;
-                  data[idx + 3] = 255;
-                }
-              }
-            }
+            const avgD = (ptA.depth + ptB.depth) / 2;
+            const normH = Math.max(0, Math.min(1, (sliceZ + L * 0.8) / (L * 1.6)));
+            segments.push({ p1: ptA, p2: ptB, avgDepth: avgD, normH });
           }
         }
-        ctx.putImageData(imgData, 0, 0);
-      } else {
-        // Wireframe Slice Contours on 3D Implicit Volume
-        ctx.lineWidth = 1.5;
-        ctx.strokeStyle = '#6366f1';
-        const slices = 16;
-        const zStep = (2 * L) / slices;
-        for (let s = 0; s <= slices; s++) {
-          const sliceZ = -L + s * zStep;
-          const gridRes = 30;
-          const stepXY = (2 * L) / gridRes;
-          const sliceVals: number[][] = [];
-          for (let i = 0; i <= gridRes; i++) {
-            sliceVals[i] = [];
-            const x = -L + i * stepXY;
-            for (let j = 0; j <= gridRes; j++) {
-              const y = -L + j * stepXY;
-              sliceVals[i][j] = implicitFn(x, y, sliceZ);
-            }
-          }
-          for (let i = 0; i < gridRes; i++) {
-            for (let j = 0; j < gridRes; j++) {
-              const v0 = sliceVals[i][j];
-              const v1 = sliceVals[i + 1][j];
-              const v2 = sliceVals[i + 1][j + 1];
-              const v3 = sliceVals[i][j + 1];
-              let mask = 0;
-              if (v0 > 0) mask |= 1;
-              if (v1 > 0) mask |= 2;
-              if (v2 > 0) mask |= 4;
-              if (v3 > 0) mask |= 8;
-              if (mask === 0 || mask === 15) continue;
-              const xA = -L + i * stepXY;
-              const xB = xA + stepXY;
-              const yA = -L + j * stepXY;
-              const yB = yA + stepXY;
-              const lerp3 = (p1: number, p2: number, va: number, vb: number) => p1 + (-va / (vb - va || 1e-6)) * (p2 - p1);
-              const pTop = project(lerp3(xA, xB, v0, v1), yA, sliceZ);
-              const pRight = project(xB, lerp3(yA, yB, v1, v2), sliceZ);
-              const pBottom = project(lerp3(xA, xB, v3, v2), yB, sliceZ);
-              const pLeft = project(xA, lerp3(yA, yB, v0, v3), sliceZ);
+      }
 
-              ctx.beginPath();
-              switch (mask) {
-                case 1:
-                case 14:
-                  ctx.moveTo(pLeft.x, pLeft.y); ctx.lineTo(pTop.x, pTop.y);
-                  break;
-                case 2:
-                case 13:
-                  ctx.moveTo(pTop.x, pTop.y); ctx.lineTo(pRight.x, pRight.y);
-                  break;
-                case 3:
-                case 12:
-                  ctx.moveTo(pLeft.x, pLeft.y); ctx.lineTo(pRight.x, pRight.y);
-                  break;
-                case 4:
-                case 11:
-                  ctx.moveTo(pRight.x, pRight.y); ctx.lineTo(pBottom.x, pBottom.y);
-                  break;
-                case 6:
-                case 9:
-                  ctx.moveTo(pTop.x, pTop.y); ctx.lineTo(pBottom.x, pBottom.y);
-                  break;
-                case 7:
-                case 8:
-                  ctx.moveTo(pLeft.x, pLeft.y); ctx.lineTo(pBottom.x, pBottom.y);
-                  break;
-                default:
-                  ctx.moveTo(pLeft.x, pLeft.y); ctx.lineTo(pRight.x, pRight.y);
-                  break;
-              }
-              ctx.stroke();
-            }
-          }
-        }
+      // Depth sort segments from furthest to nearest
+      segments.sort((a, b) => a.avgDepth - b.avgDepth);
+      ctx.lineWidth = wireframe ? 1.5 : 2.5;
+
+      for (const seg of segments) {
+        const col = getColor(seg.normH, 1.0);
+        ctx.strokeStyle = col.str;
+        ctx.beginPath();
+        ctx.moveTo(seg.p1.x, seg.p1.y);
+        ctx.lineTo(seg.p2.x, seg.p2.y);
+        ctx.stroke();
       }
 
       // Draw Coordinate Axes Base Box

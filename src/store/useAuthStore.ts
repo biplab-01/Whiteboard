@@ -31,51 +31,59 @@ const getGuestUser = (): User => {
 };
 
 
-export const useAuthStore = create<AuthState>((set) => ({
-  user: null,
-  session: null,
-  loading: true,
-  showAuthModal: false,
-  setShowAuthModal: (show) => set({ showAuthModal: show }),
+export const useAuthStore = create<AuthState>((set) => {
+  const initialGuest = typeof window !== 'undefined' ? getGuestUser() : null;
+  return {
+    user: initialGuest,
+    session: null,
+    loading: false,
+    showAuthModal: false,
+    setShowAuthModal: (show) => set({ showAuthModal: show }),
 
-  signInWithEmail: (_email: string) => {
-    // Kept for interface compatibility
-  },
+    signInWithEmail: (_email: string) => {
+      // Kept for interface compatibility
+    },
 
-  initialize: async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (session?.user) {
-        set({ session, user: session.user, loading: false });
-        useBoardStore.setState({ activeUserId: session.user.id });
-      } else {
-        const guest = getGuestUser();
-        set({ user: guest, session: null, loading: false });
-        useBoardStore.setState({ activeUserId: guest.id });
-      }
-    } catch (err) {
-      console.warn('Supabase auth session error:', err);
-      const guest = getGuestUser();
-      set({ user: guest, session: null, loading: false });
-      useBoardStore.setState({ activeUserId: guest.id });
-    }
-
-    try {
-      supabase.auth.onAuthStateChange((_event, session) => {
-        if (session?.user) {
+    initialize: async () => {
+      try {
+        // Safe timeout so network/supabase issues never hang app startup
+        const sessionPromise = supabase.auth.getSession();
+        const timeoutPromise = new Promise<{ data: { session: Session | null } }>((resolve) =>
+          setTimeout(() => resolve({ data: { session: null } }), 2000)
+        );
+        const res = await Promise.race([sessionPromise, timeoutPromise]);
+        
+        if (res?.data?.session?.user) {
+          const session = res.data.session;
           set({ session, user: session.user, loading: false });
           useBoardStore.setState({ activeUserId: session.user.id });
         } else {
           const guest = getGuestUser();
-          set({ session: null, user: guest, loading: false });
+          set({ user: guest, session: null, loading: false });
           useBoardStore.setState({ activeUserId: guest.id });
         }
-      });
-    } catch (e) {
-      console.warn('Supabase auth listener error:', e);
-    }
-  },
+      } catch (err) {
+        console.warn('Supabase auth session error:', err);
+        const guest = getGuestUser();
+        set({ user: guest, session: null, loading: false });
+        useBoardStore.setState({ activeUserId: guest.id });
+      }
+
+      try {
+        supabase.auth.onAuthStateChange((_event, session) => {
+          if (session?.user) {
+            set({ session, user: session.user, loading: false });
+            useBoardStore.setState({ activeUserId: session.user.id });
+          } else {
+            const guest = getGuestUser();
+            set({ session: null, user: guest, loading: false });
+            useBoardStore.setState({ activeUserId: guest.id });
+          }
+        });
+      } catch (e) {
+        console.warn('Supabase auth listener error:', e);
+      }
+    },
 
   signOut: async () => {
     try {
@@ -94,4 +102,5 @@ export const useAuthStore = create<AuthState>((set) => ({
     useBoardStore.getState().closeNotebook();
     useBoardStore.getState().fetchLibrary(guestUser.id);
   }
-}));
+};
+});
