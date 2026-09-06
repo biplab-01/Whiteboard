@@ -980,74 +980,65 @@ export const Board: React.FC = () => {
         const isEditing = textObj.isEditing;
         const start = textObj.selectionStart ?? 0;
         const end = textObj.selectionEnd ?? 0;
-        const hasSelectionRange = isEditing && start !== end;
 
         const baseSize = typeof textObj.fontSize === 'number' ? textObj.fontSize : 24;
         const appliedUpdates: any = { ...updates };
 
-        if (updates.superscript !== undefined) {
-          if (updates.superscript) {
-            appliedUpdates.deltaY = -Math.round(baseSize * 0.38);
-            appliedUpdates.fontSize = Math.max(8, Math.round(baseSize * 0.62));
-            appliedUpdates.superscript = true;
-            appliedUpdates.subscript = false;
-          } else {
-            appliedUpdates.deltaY = 0;
-            appliedUpdates.fontSize = baseSize;
-            appliedUpdates.superscript = false;
-          }
+        // Determine if explicitly turning off super/sub (returning to normal baseline)
+        const isTurningOffSuperSub = (updates.superscript === false && !updates.subscript) || 
+                                     (updates.subscript === false && !updates.superscript);
+
+        if (updates.superscript === true) {
+          appliedUpdates.deltaY = -Math.round(baseSize * 0.38);
+          appliedUpdates.fontSize = Math.max(8, Math.round(baseSize * 0.62));
+          appliedUpdates.superscript = true;
+          appliedUpdates.subscript = false;
+        } else if (updates.subscript === true) {
+          appliedUpdates.deltaY = Math.round(baseSize * 0.18);
+          appliedUpdates.fontSize = Math.max(8, Math.round(baseSize * 0.62));
+          appliedUpdates.subscript = true;
+          appliedUpdates.superscript = false;
+        } else if (isTurningOffSuperSub) {
+          appliedUpdates.deltaY = 0;
+          appliedUpdates.fontSize = baseSize;
+          appliedUpdates.superscript = false;
+          appliedUpdates.subscript = false;
         }
 
-        if (updates.subscript !== undefined) {
-          if (updates.subscript) {
-            appliedUpdates.deltaY = Math.round(baseSize * 0.18);
-            appliedUpdates.fontSize = Math.max(8, Math.round(baseSize * 0.62));
-            appliedUpdates.subscript = true;
-            appliedUpdates.superscript = false;
-          } else {
-            appliedUpdates.deltaY = 0;
-            appliedUpdates.fontSize = baseSize;
-            appliedUpdates.subscript = false;
-          }
-        }
-
-        let newSubTextLength = end - start;
+        const selStart = Math.min(start, end);
+        const selEnd = Math.max(start, end);
+        const hasSelectionRange = isEditing && selStart !== selEnd;
+        let newSubTextLength = selEnd - selStart;
 
         if (hasSelectionRange) {
           const currentText = textObj.text || '';
-          const selectedText = currentText.substring(start, end);
+          const selectedText = currentText.substring(selStart, selEnd);
           const cleaned = fromSuperOrSub(selectedText);
           if (cleaned !== selectedText) {
-            const updated = currentText.substring(0, start) + cleaned + currentText.substring(end);
+            const updated = currentText.substring(0, selStart) + cleaned + currentText.substring(selEnd);
             textObj.set('text', updated);
             newSubTextLength = cleaned.length;
-            textObj.selectionStart = start;
-            textObj.selectionEnd = start + newSubTextLength;
+            textObj.selectionStart = selStart;
+            textObj.selectionEnd = selStart + newSubTextLength;
           }
 
-          textObj.setSelectionStyles(appliedUpdates, start, start + newSubTextLength);
+          textObj.setSelectionStyles(appliedUpdates, selStart, selStart + newSubTextLength);
 
           // If turning off super/sub, thoroughly clean the character style overrides
-          if (updates.superscript === false || updates.subscript === false) {
-            for (let i = start; i < start + newSubTextLength; i++) {
+          if (isTurningOffSuperSub) {
+            for (let i = selStart; i < selStart + newSubTextLength; i++) {
               const loc = (textObj as any).get2DCursorLocation(i);
               if (textObj.styles && textObj.styles[loc.lineIndex] && textObj.styles[loc.lineIndex][loc.charIndex]) {
                 const cs: any = textObj.styles[loc.lineIndex][loc.charIndex];
-                if (updates.superscript === false) {
-                  delete cs.deltaY;
-                  delete cs.superscript;
-                  cs.fontSize = baseSize;
-                }
-                if (updates.subscript === false) {
-                  delete cs.deltaY;
-                  delete cs.subscript;
-                  cs.fontSize = baseSize;
-                }
+                delete cs.deltaY;
+                delete cs.superscript;
+                delete cs.subscript;
+                cs.fontSize = baseSize;
               }
             }
           }
 
-          if (start === 0 && (start + newSubTextLength) >= (textObj.text?.length || 0)) {
+          if (selStart === 0 && (selStart + newSubTextLength) >= (textObj.text?.length || 0)) {
             textObj.set(appliedUpdates);
           }
         } else if (!isEditing) {
@@ -1061,7 +1052,7 @@ export const Board: React.FC = () => {
           textObj.setSelectionStyles(appliedUpdates, 0, textLen);
           textObj.set(appliedUpdates);
 
-          if (updates.superscript === false || updates.subscript === false) {
+          if (isTurningOffSuperSub) {
             for (const key of ['deltaY', 'superscript', 'subscript']) {
               clearStylePropertyFromAllChars(textObj, key);
             }
@@ -1092,6 +1083,12 @@ export const Board: React.FC = () => {
         // Force clear cache, re-wrap lines, recalculate dimensions and coordinate handles
         (textObj as any)._forceClearCache = true;
         textObj.dirty = true;
+        if (typeof (textObj as any).clearContextTop === 'function') {
+          (textObj as any).clearContextTop();
+        }
+        if (canvas) {
+          (canvas as any).contextTopDirty = true;
+        }
         if (typeof textObj.initDimensions === 'function') {
           textObj.initDimensions();
         }
@@ -1106,8 +1103,12 @@ export const Board: React.FC = () => {
           setTimeout(() => {
             if (textObj.isEditing && textObj.hiddenTextarea) {
               textObj.hiddenTextarea.focus();
-              textObj.selectionStart = start;
-              textObj.selectionEnd = hasSelectionRange ? (start + newSubTextLength) : end;
+              textObj.selectionStart = selStart;
+              textObj.selectionEnd = hasSelectionRange ? (selStart + newSubTextLength) : selEnd;
+              if (typeof (textObj as any).updateSelection === 'function') {
+                (textObj as any).updateSelection();
+              }
+              canvas.requestRenderAll();
             }
           }, 0);
         }
