@@ -266,7 +266,7 @@ export const TextPropertiesPanel: React.FC = () => {
           {/* Superscript */}
           <button 
             type="button"
-            title="Superscript (X²)"
+            title="Superscript (Ctrl+Shift+=)"
             onClick={() => handleFormatChange({ 
               superscript: !activeTextFormat.superscript, 
               subscript: false 
@@ -283,7 +283,7 @@ export const TextPropertiesPanel: React.FC = () => {
           {/* Subscript */}
           <button 
             type="button"
-            title="Subscript (X₂)"
+            title="Subscript (Ctrl+=)"
             onClick={() => handleFormatChange({ 
               subscript: !activeTextFormat.subscript, 
               superscript: false 

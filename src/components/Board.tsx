@@ -35,87 +35,91 @@ fabric.FabricObject.prototype.perPixelTargetFind = true;
 fabric.Textbox.prototype.lockScalingFlip = true;
 fabric.IText.prototype.lockScalingFlip = true;
 
-// Complete Unicode Super/Sub mappings for flawless cross-platform rendering
-const SUPERSCRIPT_MAP: Record<string, string> = {
-  '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
-  '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
-  '+': '⁺', '-': '⁻', '=': '⁼', '(': '⁽', ')': '⁾',
-  'a': 'ᵃ', 'b': 'ᵇ', 'c': 'ᶜ', 'd': 'ᵈ', 'e': 'ᵉ',
-  'f': 'ᶠ', 'g': 'ᵍ', 'h': 'ʰ', 'i': 'ⁱ', 'j': 'ʲ',
-  'k': 'ᵏ', 'l': 'ˡ', 'm': 'ᵐ', 'n': 'ⁿ', 'o': 'ᵒ',
-  'p': 'ᵖ', 'r': 'ʳ', 's': 'ˢ', 't': 'ᵗ', 'u': 'ᵘ',
-  'v': 'ᵛ', 'w': 'ʷ', 'x': 'ˣ', 'y': 'ʸ', 'z': 'ᶻ',
-  'A': 'ᴬ', 'B': 'ᴮ', 'D': 'ᴰ', 'E': 'ᴱ', 'G': 'ᴳ',
-  'H': 'ᴴ', 'I': 'ᴵ', 'J': 'ᴶ', 'K': 'ᴷ', 'L': 'ᴸ',
-  'M': 'ᴹ', 'N': 'ᴺ', 'O': 'ᴼ', 'P': 'ᴾ', 'R': 'ᴿ',
-  'T': 'ᵀ', 'U': 'ᵁ', 'V': 'ⱽ', 'W': 'ᵂ',
+// Legacy Unicode reverse mappings for backward-compatibility cleanup
+const REVERSE_SUPER_MAP: Record<string, string> = {
+  '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4',
+  '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9',
+  '⁺': '+', '⁻': '-', '⁼': '=', '⁽': '(', '⁾': ')',
+  'ᵃ': 'a', 'ᵇ': 'b', 'ᶜ': 'c', 'ᵈ': 'd', 'ᵉ': 'e',
+  'ᶠ': 'f', 'ᵍ': 'g', 'ʰ': 'h', 'ⁱ': 'i', 'ʲ': 'j',
+  'ᵏ': 'k', 'ˡ': 'l', 'ᵐ': 'm', 'ⁿ': 'n', 'ᵒ': 'o',
+  'ᵖ': 'p', 'ʳ': 'r', 'ˢ': 's', 'ᵗ': 't', 'ᵘ': 'u',
+  'ᵛ': 'v', 'ʷ': 'w', 'ˣ': 'x', 'ʸ': 'y', 'ᶻ': 'z',
+  'ᴬ': 'A', 'ᴮ': 'B', 'ᴰ': 'D', 'ᴱ': 'E', 'ᴳ': 'G',
+  'ᴴ': 'H', 'ᴵ': 'I', 'ᴶ': 'J', 'ᴷ': 'K', 'ᴸ': 'L',
+  'ᴹ': 'M', 'ᴺ': 'N', 'ᴼ': 'O', 'ᴾ': 'P', 'ᴿ': 'R',
+  'ᵀ': 'T', 'ᵁ': 'U', 'ⱽ': 'V', 'ᵂ': 'W',
 };
 
-const SUBSCRIPT_MAP: Record<string, string> = {
-  '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
-  '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
-  '+': '₊', '-': '₋', '=': '₌', '(': '₍', ')': '₎',
-  'a': 'ₐ', 'e': 'ₑ', 'h': 'ₕ', 'i': 'ᵢ', 'j': 'ⱼ',
-  'k': 'ₖ', 'l': 'ₗ', 'm': 'ₘ', 'n': 'ₙ', 'o': 'ₒ',
-  'p': 'ₚ', 'r': 'ᵣ', 's': 'ₛ', 't': 'ₜ', 'u': 'ᵤ',
-  'v': 'ᵥ', 'x': 'ₓ',
-};
-
-const REVERSE_SUPER_MAP: Record<string, string> = Object.fromEntries(
-  Object.entries(SUPERSCRIPT_MAP).map(([k, v]) => [v, k])
-);
-
-const REVERSE_SUB_MAP: Record<string, string> = Object.fromEntries(
-  Object.entries(SUBSCRIPT_MAP).map(([k, v]) => [v, k])
-);
-
-const toSuperscript = (str: string): string => {
-  return str.split('').map(ch => SUPERSCRIPT_MAP[ch] || ch).join('');
-};
-
-const toSubscript = (str: string): string => {
-  return str.split('').map(ch => SUBSCRIPT_MAP[ch] || ch).join('');
+const REVERSE_SUB_MAP: Record<string, string> = {
+  '₀': '0', '₁': '1', '₂': '2', '₃': '3', '₄': '4',
+  '₅': '5', '₆': '6', '₇': '7', '₈': '8', '₉': '9',
+  '₊': '+', '₋': '-', '₌': '=', '₍': '(', '₎': ')',
+  'ₐ': 'a', 'ₑ': 'e', 'ₕ': 'h', 'ᵢ': 'i', 'ⱼ': 'j',
+  'ₖ': 'k', 'ₗ': 'l', 'ₘ': 'm', 'ₙ': 'n', 'ₒ': 'o',
+  'ₚ': 'p', 'ᵣ': 'r', 'ₛ': 's', 'ₜ': 't', 'ᵤ': 'u',
+  'ᵥ': 'v', 'ₓ': 'x',
 };
 
 const fromSuperOrSub = (str: string): string => {
+  if (!str) return '';
   return str.split('').map(ch => REVERSE_SUPER_MAP[ch] || REVERSE_SUB_MAP[ch] || ch).join('');
 };
 
-const isAllSuperscript = (str: string): boolean => {
-  if (!str || str.trim().length === 0) return false;
-  return str.split('').every(ch => !!REVERSE_SUPER_MAP[ch] || ch === ' ');
-};
-
-const isAllSubscript = (str: string): boolean => {
-  if (!str || str.trim().length === 0) return false;
-  return str.split('').every(ch => !!REVERSE_SUB_MAP[ch] || ch === ' ');
-};
-
-// Custom insertChars hook to support seamless real-time superscript and subscript typing
-const origTextboxInsertChars = fabric.Textbox.prototype.insertChars;
-fabric.Textbox.prototype.insertChars = function(chars: string, style?: any, start?: number, end?: number) {
+// Hook into Fabric's insertNewStyleBlock to provide professional MS Word-style typography for superscript and subscript typing
+const origITextInsertNewStyleBlock = fabric.IText.prototype.insertNewStyleBlock;
+fabric.IText.prototype.insertNewStyleBlock = function(
+  insertedText: string[],
+  start: number,
+  copiedStyle?: any[]
+) {
   const currentFormat = useBoardStore.getState().activeTextFormat;
-  let finalChars = chars;
+  const baseSize = typeof this.fontSize === 'number' ? this.fontSize : 24;
+
+  const cursorLoc = (this as any).get2DCursorLocation ? (this as any).get2DCursorLocation(start, true) : null;
+  const lineStyles = cursorLoc && this.styles ? this.styles[cursorLoc.lineIndex] : null;
+  const prevCharStyle: any = lineStyles ? (lineStyles[cursorLoc.charIndex ? cursorLoc.charIndex - 1 : 0] || {}) : {};
+
   if (currentFormat?.superscript) {
-    finalChars = toSuperscript(chars);
+    const superStyle = {
+      ...prevCharStyle,
+      ...(currentFormat.fill ? { fill: currentFormat.fill } : {}),
+      ...(currentFormat.fontFamily ? { fontFamily: currentFormat.fontFamily } : {}),
+      fontSize: Math.max(8, Math.round(baseSize * 0.62)),
+      deltaY: -Math.round(baseSize * 0.38),
+      superscript: true,
+      subscript: false,
+    };
+    copiedStyle = insertedText.map(() => ({ ...superStyle }));
   } else if (currentFormat?.subscript) {
-    finalChars = toSubscript(chars);
+    const subStyle = {
+      ...prevCharStyle,
+      ...(currentFormat.fill ? { fill: currentFormat.fill } : {}),
+      ...(currentFormat.fontFamily ? { fontFamily: currentFormat.fontFamily } : {}),
+      fontSize: Math.max(8, Math.round(baseSize * 0.62)),
+      deltaY: Math.round(baseSize * 0.18),
+      subscript: true,
+      superscript: false,
+    };
+    copiedStyle = insertedText.map(() => ({ ...subStyle }));
+  } else if (currentFormat && !currentFormat.superscript && !currentFormat.subscript) {
+    // In normal mode: prevent newly typed characters from inheriting superscript/subscript deltaY from the preceding char
+    if (prevCharStyle.superscript || prevCharStyle.subscript || (typeof prevCharStyle.deltaY === 'number' && prevCharStyle.deltaY !== 0)) {
+      copiedStyle = insertedText.map(() => ({
+        ...prevCharStyle,
+        deltaY: 0,
+        fontSize: baseSize,
+        superscript: false,
+        subscript: false,
+      }));
+    }
   }
-  return (origTextboxInsertChars as any).call(this, finalChars, style, start, end);
+
+  return (origITextInsertNewStyleBlock as any).call(this, insertedText, start, copiedStyle);
 };
 
-const origITextInsertChars = fabric.IText.prototype.insertChars;
-if (typeof origITextInsertChars === 'function') {
-  fabric.IText.prototype.insertChars = function(chars: string, style?: any, start?: number, end?: number) {
-    const currentFormat = useBoardStore.getState().activeTextFormat;
-    let finalChars = chars;
-    if (currentFormat?.superscript) {
-      finalChars = toSuperscript(chars);
-    } else if (currentFormat?.subscript) {
-      finalChars = toSubscript(chars);
-    }
-    return (origITextInsertChars as any).call(this, finalChars, style, start, end);
-  };
+if (fabric.Textbox && fabric.Textbox.prototype) {
+  fabric.Textbox.prototype.insertNewStyleBlock = fabric.IText.prototype.insertNewStyleBlock;
 }
 
 // Helper: Normalize Textbox dimensions, scale, and controls to prevent distortion
@@ -811,18 +815,41 @@ export const Board: React.FC = () => {
           }
 
           const currentStoreFormat = useBoardStore.getState().activeTextFormat;
-          const currentText = textObj.text || '';
           const start = textObj.selectionStart || 0;
           const end = textObj.selectionEnd || start;
-          const selectedText = (start !== end) ? currentText.substring(start, end) : '';
 
-          const isSuper = (selectedText && isAllSuperscript(selectedText)) 
-            || (styles.superscript !== undefined ? !!styles.superscript : (typeof styles.deltaY === 'number' && styles.deltaY < 0))
-            || (textObj.isEditing && (start === end) && !!currentStoreFormat?.superscript);
+          let isSuper = false;
+          let isSub = false;
 
-          const isSub = (selectedText && isAllSubscript(selectedText)) 
-            || (styles.subscript !== undefined ? !!styles.subscript : (typeof styles.deltaY === 'number' && styles.deltaY > 0))
-            || (textObj.isEditing && (start === end) && !!currentStoreFormat?.subscript);
+          if (start !== end && typeof textObj.getSelectionStyles === 'function') {
+            const selStyles = textObj.getSelectionStyles(start, end, false);
+            if (selStyles && selStyles.length > 0) {
+              isSuper = selStyles.every((s: any) => (typeof s.deltaY === 'number' && s.deltaY < 0) || !!s.superscript);
+              isSub = selStyles.every((s: any) => (typeof s.deltaY === 'number' && s.deltaY > 0) || !!s.subscript);
+            }
+          } else if (textObj.isEditing) {
+            const prevLoc = start > 0 ? (textObj as any).get2DCursorLocation(start - 1) : null;
+            const prevSt: any = (prevLoc && textObj.styles?.[prevLoc.lineIndex]?.[prevLoc.charIndex]) || {};
+            const prevSuper = (typeof prevSt.deltaY === 'number' && prevSt.deltaY < 0) || !!prevSt.superscript;
+            const prevSub = (typeof prevSt.deltaY === 'number' && prevSt.deltaY > 0) || !!prevSt.subscript;
+
+            if (currentStoreFormat?.superscript !== undefined && currentStoreFormat.superscript !== prevSuper) {
+              isSuper = currentStoreFormat.superscript;
+            } else {
+              isSuper = prevSuper;
+            }
+
+            if (currentStoreFormat?.subscript !== undefined && currentStoreFormat.subscript !== prevSub) {
+              isSub = currentStoreFormat.subscript;
+            } else {
+              isSub = prevSub;
+            }
+          } else if (typeof textObj.getSelectionStyles === 'function') {
+            const sampleStyles = textObj.getSelectionStyles(0, Math.min(textObj.text?.length || 1, 1), false);
+            const st: any = sampleStyles[0] || {};
+            isSuper = (typeof st.deltaY === 'number' && st.deltaY < 0) || !!st.superscript;
+            isSub = (typeof st.deltaY === 'number' && st.deltaY > 0) || !!st.subscript;
+          }
 
           useBoardStore.getState().setActiveShapeFormat(null);
           useBoardStore.getState().setActiveTextFormat({
@@ -960,8 +987,8 @@ export const Board: React.FC = () => {
 
         if (updates.superscript !== undefined) {
           if (updates.superscript) {
-            appliedUpdates.deltaY = -Math.round(baseSize * 0.35);
-            appliedUpdates.fontSize = Math.round(baseSize * 0.65);
+            appliedUpdates.deltaY = -Math.round(baseSize * 0.38);
+            appliedUpdates.fontSize = Math.max(8, Math.round(baseSize * 0.62));
             appliedUpdates.superscript = true;
             appliedUpdates.subscript = false;
           } else {
@@ -973,8 +1000,8 @@ export const Board: React.FC = () => {
 
         if (updates.subscript !== undefined) {
           if (updates.subscript) {
-            appliedUpdates.deltaY = Math.round(baseSize * 0.3);
-            appliedUpdates.fontSize = Math.round(baseSize * 0.65);
+            appliedUpdates.deltaY = Math.round(baseSize * 0.18);
+            appliedUpdates.fontSize = Math.max(8, Math.round(baseSize * 0.62));
             appliedUpdates.subscript = true;
             appliedUpdates.superscript = false;
           } else {
@@ -989,50 +1016,66 @@ export const Board: React.FC = () => {
         if (hasSelectionRange) {
           const currentText = textObj.text || '';
           const selectedText = currentText.substring(start, end);
-          let newSubText = selectedText;
-
-          if (updates.superscript === true) {
-            newSubText = toSuperscript(selectedText);
-          } else if (updates.subscript === true) {
-            newSubText = toSubscript(selectedText);
-          } else if (updates.superscript === false || updates.subscript === false) {
-            newSubText = fromSuperOrSub(selectedText);
-          }
-
-          if (newSubText !== selectedText) {
-            const updatedFullText = currentText.substring(0, start) + newSubText + currentText.substring(end);
-            textObj.set('text', updatedFullText);
-            newSubTextLength = newSubText.length;
+          const cleaned = fromSuperOrSub(selectedText);
+          if (cleaned !== selectedText) {
+            const updated = currentText.substring(0, start) + cleaned + currentText.substring(end);
+            textObj.set('text', updated);
+            newSubTextLength = cleaned.length;
             textObj.selectionStart = start;
             textObj.selectionEnd = start + newSubTextLength;
           }
 
           textObj.setSelectionStyles(appliedUpdates, start, start + newSubTextLength);
 
+          // If turning off super/sub, thoroughly clean the character style overrides
+          if (updates.superscript === false || updates.subscript === false) {
+            for (let i = start; i < start + newSubTextLength; i++) {
+              const loc = (textObj as any).get2DCursorLocation(i);
+              if (textObj.styles && textObj.styles[loc.lineIndex] && textObj.styles[loc.lineIndex][loc.charIndex]) {
+                const cs: any = textObj.styles[loc.lineIndex][loc.charIndex];
+                if (updates.superscript === false) {
+                  delete cs.deltaY;
+                  delete cs.superscript;
+                  cs.fontSize = baseSize;
+                }
+                if (updates.subscript === false) {
+                  delete cs.deltaY;
+                  delete cs.subscript;
+                  cs.fontSize = baseSize;
+                }
+              }
+            }
+          }
+
           if (start === 0 && (start + newSubTextLength) >= (textObj.text?.length || 0)) {
             textObj.set(appliedUpdates);
           }
-        } else {
-          // No range selected
+        } else if (!isEditing) {
+          // Whole object selected
+          const currentText = textObj.text || '';
+          const cleaned = fromSuperOrSub(currentText);
+          if (cleaned !== currentText) {
+            textObj.set('text', cleaned);
+          }
+          const textLen = textObj.text?.length || 0;
+          textObj.setSelectionStyles(appliedUpdates, 0, textLen);
           textObj.set(appliedUpdates);
 
-          if (updates.superscript === true) {
-            if (textObj.text && textObj.text.length > 0 && !isEditing) {
-              textObj.set('text', toSuperscript(textObj.text));
-            }
-          } else if (updates.subscript === true) {
-            if (textObj.text && textObj.text.length > 0 && !isEditing) {
-              textObj.set('text', toSubscript(textObj.text));
-            }
-          } else if (updates.superscript === false || updates.subscript === false) {
-            if (textObj.text && textObj.text.length > 0 && !isEditing) {
-              textObj.set('text', fromSuperOrSub(textObj.text));
-            }
-          } else {
-            for (const key of Object.keys(appliedUpdates)) {
+          if (updates.superscript === false || updates.subscript === false) {
+            for (const key of ['deltaY', 'superscript', 'subscript']) {
               clearStylePropertyFromAllChars(textObj, key);
             }
+            textObj.set('fontSize', baseSize);
           }
+        }
+
+        // Keep zustand activeTextFormat in sync so UI buttons and real-time typing reflect current state
+        const currentActiveFormat = useBoardStore.getState().activeTextFormat;
+        if (currentActiveFormat) {
+          useBoardStore.getState().setActiveTextFormat({
+            ...currentActiveFormat,
+            ...appliedUpdates,
+          });
         }
 
         // Persist formatting preferences for future text boxes (size, family, color)
@@ -1135,6 +1178,46 @@ export const Board: React.FC = () => {
       deleteActiveObjects();
     };
 
+    // MS Word-style keyboard shortcuts specifically for Superscript (Ctrl+Shift+= / Ctrl+Shift++) and Subscript (Ctrl+=)
+    const handleSubSuperShortcuts = (e: KeyboardEvent) => {
+      const activeObj = canvas.getActiveObject();
+      if (!activeObj || (activeObj.type !== 'textbox' && activeObj.type !== 'i-text')) return;
+
+      const isCtrlOrMeta = e.ctrlKey || e.metaKey;
+      if (!isCtrlOrMeta) return;
+
+      // Superscript: Ctrl + Shift + = (or Ctrl + Shift + +)
+      if (e.shiftKey && (e.key === '=' || e.key === '+')) {
+        e.preventDefault();
+        e.stopPropagation();
+        const curFormat = useBoardStore.getState().activeTextFormat;
+        const isSuper = !!curFormat?.superscript;
+        window.dispatchEvent(new CustomEvent('format-text', {
+          detail: {
+            superscript: !isSuper,
+            subscript: false,
+          }
+        }));
+        return;
+      }
+
+      // Subscript: Ctrl + = (without Shift)
+      if (!e.shiftKey && e.key === '=') {
+        e.preventDefault();
+        e.stopPropagation();
+        const curFormat = useBoardStore.getState().activeTextFormat;
+        const isSub = !!curFormat?.subscript;
+        window.dispatchEvent(new CustomEvent('format-text', {
+          detail: {
+            subscript: !isSub,
+            superscript: false,
+          }
+        }));
+        return;
+      }
+    };
+
+    window.addEventListener('keydown', handleSubSuperShortcuts, { capture: true });
     window.addEventListener('format-text', formatTextHandler);
     window.addEventListener('format-shape', formatShapeHandler);
     window.addEventListener('arrange-object', arrangeObjectHandler);
@@ -1144,6 +1227,7 @@ export const Board: React.FC = () => {
     window.addEventListener('delete-object', deleteObjectHandler);
 
     return () => {
+      window.removeEventListener('keydown', handleSubSuperShortcuts, { capture: true });
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('format-text', formatTextHandler);
       window.removeEventListener('format-shape', formatShapeHandler);
