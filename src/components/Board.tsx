@@ -122,169 +122,6 @@ if (fabric.Textbox && fabric.Textbox.prototype) {
   fabric.Textbox.prototype.insertNewStyleBlock = fabric.IText.prototype.insertNewStyleBlock;
 }
 
-// Hook into Fabric's getCursorRenderingData to ensure the text cursor sits accurately
-// next to punctuation characters (like full stops / periods, commas, etc.) without displaying a phantom extra space.
-const origGetCursorRenderingData = fabric.IText.prototype.getCursorRenderingData;
-fabric.IText.prototype.getCursorRenderingData = function(
-  this: any,
-  selectionStart?: number,
-  boundaries?: any
-) {
-  const selStart = typeof selectionStart === 'number' ? selectionStart : this.selectionStart;
-  const data = (origGetCursorRenderingData as any).call(this, selStart, boundaries);
-  if (!data) return data;
-
-  try {
-    const loc = (this as any).get2DCursorLocation ? (this as any).get2DCursorLocation(selectionStart) : null;
-    if (loc && loc.charIndex > 0 && (this as any)._textLines && (this as any)._textLines[loc.lineIndex]) {
-      const line = (this as any)._textLines[loc.lineIndex];
-      const prevChar = line[loc.charIndex - 1];
-      const nextChar = line[loc.charIndex];
-
-      // Punctuation marks (like '.', ',', ':', ';', '!', '?') have large empty right-side bearings in fonts.
-      // When the cursor immediately follows punctuation and is NOT followed by an actual space character,
-      // pull the cursor snug against the glyph so it doesn't appear to have an extra phantom space.
-      if (['.', ',', ':', ';', '!', '?'].includes(prevChar) && nextChar !== ' ') {
-        const bounds = (this as any).__charBounds?.[loc.lineIndex];
-        const prevBound = bounds?.[loc.charIndex - 1];
-        if (prevBound && typeof prevBound.width === 'number' && prevBound.width > 0) {
-          const pullAmount = prevBound.width * 0.48;
-          data.left -= pullAmount;
-        }
-      }
-    }
-  } catch {
-    // Fallback gracefully
-  }
-
-  return data;
-};
-
-if (fabric.Textbox && fabric.Textbox.prototype) {
-  fabric.Textbox.prototype.getCursorRenderingData = fabric.IText.prototype.getCursorRenderingData;
-
-  // Split on all Unicode whitespace and non-breaking spaces
-  (fabric.Textbox.prototype as any)._wordJoiners = /[\s\u00A0\u1680\u2000-\u200B\u202F\u205F\u3000]/;
-
-  // Custom wrapLine: true word-wrapping with right clearance buffer and break-word fallback
-  // Ensures words wrap cleanly at the box boundary and never get cut off at either side!
-  (fabric.Textbox.prototype as any)._wrapLine = function(
-    lineIndex: number,
-    desiredWidth: number,
-    data: any,
-    reservedSpace: number = 0
-  ) {
-    const { wordsData } = data;
-    const charSpacing = (this as any)._getWidthOfCharSpacing ? (this as any)._getWidthOfCharSpacing() : 0;
-    const isSplitGrapheme = !!this.splitByGrapheme;
-    const spaceChar = isSplitGrapheme ? '' : ' ';
-    const lines: any[][] = [];
-    let currentLine: any[] = [];
-    let currentLineWidth = 0;
-    let isFirstWordOnLine = true;
-
-    // Right clearance safety buffer: leaves comfortable breathing room inside the box
-    // so characters at the end of a line never touch or bleed over the border or get clipped.
-    // If a word doesn't fit within this safe area, it drops to the next line ("go under").
-    const fontSize = typeof this.fontSize === 'number' ? this.fontSize : 20;
-    const rightClearance = isSplitGrapheme ? 0 : Math.max(14, Math.round(fontSize * 0.45));
-    const maxLineWidth = Math.max(30, desiredWidth - reservedSpace - rightClearance);
-    const words = wordsData?.[lineIndex] || [];
-
-    let wordStartOffset = 0;
-
-    for (let i = 0; i < words.length; i++) {
-      const { word, width: wordWidth } = words[i];
-
-      if (isSplitGrapheme) {
-        currentLineWidth += wordWidth - charSpacing;
-        if (currentLineWidth > maxLineWidth && !isFirstWordOnLine) {
-          lines.push(currentLine);
-          currentLine = [];
-          currentLineWidth = wordWidth;
-          isFirstWordOnLine = true;
-        } else {
-          currentLineWidth += charSpacing;
-        }
-        currentLine = currentLine.concat(word);
-        isFirstWordOnLine = false;
-        wordStartOffset += word.length;
-        continue;
-      }
-
-      const spaceOffset = wordStartOffset > 0 ? wordStartOffset - 1 : 0;
-      const spaceWidth = isFirstWordOnLine ? 0 : (this as any)._measureWord([spaceChar], lineIndex, spaceOffset);
-
-      if (wordWidth <= maxLineWidth) {
-        // Normal word: if adding it causes the line to exceed maxLineWidth, wrap to next line ("go under")
-        if (currentLineWidth + spaceWidth + wordWidth - charSpacing > maxLineWidth && !isFirstWordOnLine) {
-          lines.push(currentLine);
-          currentLine = [];
-          currentLineWidth = wordWidth;
-          currentLine = currentLine.concat(word);
-          isFirstWordOnLine = false;
-        } else {
-          if (!isFirstWordOnLine) {
-            currentLine.push(spaceChar);
-            currentLineWidth += spaceWidth;
-          }
-          currentLine = currentLine.concat(word);
-          currentLineWidth += wordWidth;
-          isFirstWordOnLine = false;
-        }
-      } else {
-        // Overlong continuous token (e.g. continuous underscores '_______' or long unbroken string):
-        // Break character-by-character so it never bleeds beyond the box boundaries
-        if (!isFirstWordOnLine) {
-          lines.push(currentLine);
-          currentLine = [];
-          currentLineWidth = 0;
-          isFirstWordOnLine = true;
-        }
-
-        const graphemes = this.graphemeSplit(Array.isArray(word) ? word.join('') : String(word));
-        let charOffset = wordStartOffset;
-        for (let g = 0; g < graphemes.length; g++) {
-          const gChar = graphemes[g];
-          const gWidth = (this as any)._measureWord([gChar], lineIndex, charOffset);
-          if (currentLineWidth + gWidth > maxLineWidth && !isFirstWordOnLine) {
-            lines.push(currentLine);
-            currentLine = [];
-            currentLineWidth = 0;
-            isFirstWordOnLine = true;
-          }
-          currentLine.push(gChar);
-          currentLineWidth += gWidth;
-          charOffset++;
-          isFirstWordOnLine = false;
-        }
-      }
-
-      // Advance wordStartOffset for next word (+1 for space)
-      wordStartOffset += word.length + 1;
-    }
-
-    if (currentLine.length > 0) {
-      lines.push(currentLine);
-    }
-
-    this.dynamicMinWidth = 0;
-    return lines;
-  };
-}
-
-// Hook into IText/Textbox insertChars to clean non-breaking spaces on paste/type
-const origInsertChars = fabric.IText.prototype.insertChars;
-fabric.IText.prototype.insertChars = function(text: string, style?: any, start?: number, end?: number) {
-  const cleanText = typeof text === 'string'
-    ? text.replace(/[\u00A0\u1680\u2000-\u200B\u202F\u205F\u3000]/g, ' ')
-    : text;
-  return (origInsertChars as any).call(this, cleanText, style, start, end);
-};
-if (fabric.Textbox && fabric.Textbox.prototype) {
-  fabric.Textbox.prototype.insertChars = fabric.IText.prototype.insertChars;
-}
-
 // Helper: Normalize Textbox dimensions, scale, and controls to prevent distortion
 const normalizeTextObject = (obj: fabric.FabricObject) => {
   if (obj.type === 'textbox' || obj.type === 'i-text') {
@@ -294,45 +131,29 @@ const normalizeTextObject = (obj: fabric.FabricObject) => {
       mb: false,
     });
     textObj.lockScalingFlip = true;
-    textObj.splitByGrapheme = false; // Wrap by full words with break-word fallback
-    if (typeof textObj.padding !== 'number' || textObj.padding < 6) {
-      textObj.padding = 6;
-    }
+    textObj.splitByGrapheme = false; // Always wrap full words, not individual characters
 
     const sx = textObj.scaleX ?? 1;
     const sy = textObj.scaleY ?? 1;
     if (sx !== 1 || sy !== 1) {
-      if (Math.abs(sx - 1) > 0.001 && Math.abs(sy - 1) < 0.001) {
-        // Horizontal side handle drag: adjust width cleanly
-        const curWidth = textObj.width ?? 200;
-        textObj.set({
-          width: Math.max(60, Math.round(curWidth * sx)),
-          scaleX: 1,
-          scaleY: 1,
-        });
-      } else {
-        // Proportional corner scale: scale BOTH fontSize and width together!
-        const scale = Math.max(sx, sy);
-        const curFontSize = textObj.fontSize ?? 24;
-        const newFontSize = Math.max(8, Math.round(curFontSize * scale));
-        const curWidth = textObj.width ?? 200;
-        const newWidth = Math.max(60, Math.round(curWidth * scale));
-        textObj.set({
-          fontSize: newFontSize,
-          width: newWidth,
-          scaleX: 1,
-          scaleY: 1,
-        });
+      const scale = sy !== 1 ? sy : sx;
+      const curFontSize = textObj.fontSize ?? 24;
+      const newFontSize = Math.max(8, Math.round(curFontSize * scale));
+      const curWidth = textObj.width ?? 200;
+      const newWidth = Math.max(40, Math.round((curWidth * sx) / scale));
+      textObj.set({
+        fontSize: newFontSize,
+        width: newWidth,
+        scaleX: 1,
+        scaleY: 1,
+      });
+      (textObj as any)._forceClearCache = true;
+      textObj.dirty = true;
+      if (typeof textObj.initDimensions === 'function') {
+        textObj.initDimensions();
       }
+      textObj.setCoords();
     }
-
-    (textObj as any).dynamicMinWidth = 0;
-    (textObj as any)._forceClearCache = true;
-    textObj.dirty = true;
-    if (typeof textObj.initDimensions === 'function') {
-      textObj.initDimensions();
-    }
-    textObj.setCoords();
   }
 };
 
@@ -1039,15 +860,7 @@ export const Board: React.FC = () => {
       useBoardStore.getState().setActiveShapeFormat(null);
     });
     canvas.on('text:selection:changed', handleSelectionUpdate);
-    canvas.on('text:changed', (e: any) => {
-      handleSelectionUpdate();
-      const target = e.target as fabric.Textbox;
-      if (target && (target.type === 'textbox' || target.type === 'i-text')) {
-        (target as any).dynamicMinWidth = 0;
-        if (typeof target.initDimensions === 'function') target.initDimensions();
-        target.setCoords();
-      }
-    });
+    canvas.on('text:changed', handleSelectionUpdate);
 
     // If existing text has placeholder, select all so typing overwrites it
     canvas.on('text:editing:entered', (e: any) => {
@@ -1671,74 +1484,35 @@ export const Board: React.FC = () => {
 
     const handlePaste = async () => {
       const canvas = fabricRef.current;
-      if (!canvas) return;
-      const active = canvas.getActiveObject();
-      if (active && (active as any).isEditing) return;
+      if (!canvas || !clipboardRef.current) return;
 
-      if (clipboardRef.current) {
-        const clonedObj = await clipboardRef.current.clone();
-        canvas.discardActiveObject();
+      const clonedObj = await clipboardRef.current.clone();
+      canvas.discardActiveObject();
 
-        clonedObj.set({
-          left: clonedObj.left + 24,
-          top: clonedObj.top + 24,
-          evented: true,
+      clonedObj.set({
+        left: clonedObj.left + 24,
+        top: clonedObj.top + 24,
+        evented: true,
+      });
+
+      if (clonedObj.type === 'activeSelection') {
+        const activeSelection = clonedObj as fabric.ActiveSelection;
+        activeSelection.canvas = canvas;
+        activeSelection.forEachObject((obj) => {
+          canvas.add(obj);
         });
-
-        if (clonedObj.type === 'activeSelection') {
-          const activeSelection = clonedObj as fabric.ActiveSelection;
-          activeSelection.canvas = canvas;
-          activeSelection.forEachObject((obj) => {
-            canvas.add(obj);
-          });
-          activeSelection.setCoords();
-        } else {
-          canvas.add(clonedObj);
-        }
-
-        // Offset clipboard for consecutive pastes
-        clipboardRef.current.top += 24;
-        clipboardRef.current.left += 24;
-
-        canvas.setActiveObject(clonedObj);
-        canvas.requestRenderAll();
-        recordState();
+        activeSelection.setCoords();
       } else {
-        try {
-          if (navigator.clipboard && navigator.clipboard.readText) {
-            const clipText = await navigator.clipboard.readText();
-            if (clipText && clipText.trim()) {
-              const cleanText = clipText.replace(/[\u00A0\u1680\u2000-\u200B\u202F\u205F\u3000]/g, ' ');
-              const { width: pageW } = getPageDimensions(pageSize, pageOrientation);
-              const pageCenterX = (canvas.width! - pageW) / 2;
-              const margin = 28;
-              const innerPadding = 24;
-              const maxBoxW = Math.min(640, Math.max(280, pageW - (margin + innerPadding) * 2));
-
-              const currentFormat = useBoardStore.getState().activeTextFormat;
-              const textbox = new fabric.Textbox(cleanText, {
-                left: pageCenterX + margin + innerPadding,
-                top: 150,
-                width: maxBoxW,
-                padding: 6,
-                fontSize: currentFormat?.fontSize || 20,
-                fontFamily: currentFormat?.fontFamily || 'Inter',
-                fill: currentFormat?.fill || (isDarkMode ? '#ffffff' : '#000000'),
-                splitByGrapheme: false,
-                lockScalingFlip: true,
-                editable: true,
-              });
-              textbox.setControlsVisibility({ mt: false, mb: false });
-              canvas.add(textbox);
-              canvas.setActiveObject(textbox);
-              canvas.requestRenderAll();
-              recordState();
-            }
-          }
-        } catch {
-          // Browser permission blocked or not focused, ignore gracefully
-        }
+        canvas.add(clonedObj);
       }
+
+      // Offset clipboard for consecutive pastes
+      clipboardRef.current.top += 24;
+      clipboardRef.current.left += 24;
+
+      canvas.setActiveObject(clonedObj);
+      canvas.requestRenderAll();
+      recordState();
     };
 
     const handleKeyDown = async (e: KeyboardEvent) => {
@@ -2635,43 +2409,13 @@ export const Board: React.FC = () => {
       }
     });
 
-    // Ensure proportional scaling on corner resize, but allow width adjustment on side handles
+    // Ensure proportional scaling during resize
     canvas.on('object:scaling', (e) => {
       if (e.target && (e.target.type === 'textbox' || e.target.type === 'i-text')) {
         const textObj = e.target as fabric.Textbox;
-        const corner = (e as any).transform?.corner;
-        if (corner === 'mr' || corner === 'ml') {
-          textObj.scaleY = 1;
-          if (textObj.scaleX && Math.abs(textObj.scaleX - 1) > 0.001) {
-            textObj.width = Math.max(60, Math.round((textObj.width || 200) * textObj.scaleX));
-            textObj.scaleX = 1;
-            (textObj as any).dynamicMinWidth = 0;
-            (textObj as any)._forceClearCache = true;
-            textObj.dirty = true;
-            if (typeof textObj.initDimensions === 'function') {
-              textObj.initDimensions();
-            }
-          }
-        } else {
-          const s = Math.max(textObj.scaleX || 1, textObj.scaleY || 1);
-          textObj.scaleX = s;
-          textObj.scaleY = s;
-        }
-      }
-    });
-
-    // Real-time dimension and reflow update while user resizes textbox width
-    canvas.on('object:resizing', (e) => {
-      if (e.target && (e.target.type === 'textbox' || e.target.type === 'i-text')) {
-        const textObj = e.target as fabric.Textbox;
-        (textObj as any).dynamicMinWidth = 0;
-        (textObj as any)._forceClearCache = true;
-        textObj.dirty = true;
-        if (typeof textObj.initDimensions === 'function') {
-          textObj.initDimensions();
-        }
-        textObj.setCoords();
-        canvas.requestRenderAll();
+        const s = Math.max(textObj.scaleX || 1, textObj.scaleY || 1);
+        textObj.scaleX = s;
+        textObj.scaleY = s;
       }
     });
 
