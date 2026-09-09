@@ -122,6 +122,46 @@ if (fabric.Textbox && fabric.Textbox.prototype) {
   fabric.Textbox.prototype.insertNewStyleBlock = fabric.IText.prototype.insertNewStyleBlock;
 }
 
+// Hook into Fabric's getCursorRenderingData to ensure the text cursor sits accurately
+// next to punctuation characters (like full stops / periods, commas, etc.) without displaying a phantom extra space.
+const origGetCursorRenderingData = fabric.IText.prototype.getCursorRenderingData;
+fabric.IText.prototype.getCursorRenderingData = function(
+  selectionStart: number = this.selectionStart,
+  boundaries?: any
+) {
+  const data = (origGetCursorRenderingData as any).call(this, selectionStart, boundaries);
+  if (!data) return data;
+
+  try {
+    const loc = (this as any).get2DCursorLocation ? (this as any).get2DCursorLocation(selectionStart) : null;
+    if (loc && loc.charIndex > 0 && (this as any)._textLines && (this as any)._textLines[loc.lineIndex]) {
+      const line = (this as any)._textLines[loc.lineIndex];
+      const prevChar = line[loc.charIndex - 1];
+      const nextChar = line[loc.charIndex];
+
+      // Punctuation marks (like '.', ',', ':', ';', '!', '?') have large empty right-side bearings in fonts.
+      // When the cursor immediately follows punctuation and is NOT followed by an actual space character,
+      // pull the cursor snug against the glyph so it doesn't appear to have an extra phantom space.
+      if (['.', ',', ':', ';', '!', '?'].includes(prevChar) && nextChar !== ' ') {
+        const bounds = (this as any).__charBounds?.[loc.lineIndex];
+        const prevBound = bounds?.[loc.charIndex - 1];
+        if (prevBound && typeof prevBound.width === 'number' && prevBound.width > 0) {
+          const pullAmount = prevBound.width * 0.48;
+          data.left -= pullAmount;
+        }
+      }
+    }
+  } catch {
+    // Fallback gracefully
+  }
+
+  return data;
+};
+
+if (fabric.Textbox && fabric.Textbox.prototype) {
+  fabric.Textbox.prototype.getCursorRenderingData = fabric.IText.prototype.getCursorRenderingData;
+}
+
 // Helper: Normalize Textbox dimensions, scale, and controls to prevent distortion
 const normalizeTextObject = (obj: fabric.FabricObject) => {
   if (obj.type === 'textbox' || obj.type === 'i-text') {
@@ -1872,7 +1912,8 @@ export const Board: React.FC = () => {
 
       if (!canvas || !remotePage || remotePage.id !== livePageId) return;
 
-      // If user is currently editing text, don't interrupt
+      // If user is currently editing text or drawing on canvas, don't interrupt
+      if (canvas.isDrawingMode && (canvas as any)._isCurrentlyDrawing) return;
       const active = canvas.getActiveObject();
       if (active && (active as any).isEditing) return;
 
@@ -2224,8 +2265,33 @@ export const Board: React.FC = () => {
     } else if (currentTool === 'pen' || currentTool === 'highlighter') {
       canvas.isDrawingMode = true;
       const brush = new fabric.PencilBrush(canvas);
-      brush.color = currentTool === 'highlighter' ? `${strokeColor}80` : strokeColor;
-      brush.width = strokeWidth;
+      
+      if (currentTool === 'highlighter') {
+        try {
+          const colorObj = new fabric.Color(strokeColor || '#f59e0b');
+          brush.color = colorObj.setAlpha(0.38).toRgba();
+        } catch {
+          brush.color = 'rgba(245, 158, 11, 0.38)';
+        }
+        brush.width = Math.max(strokeWidth * 4, 18);
+      } else {
+        brush.color = strokeColor;
+        brush.width = strokeWidth;
+      }
+
+      brush.strokeLineCap = 'round';
+      brush.strokeLineJoin = 'round';
+
+      // Ensure tap dots (e.g. dots on 'i', periods, quick marks) are not discarded as empty paths by Fabric
+      const originalConvert = brush.convertPointsToSVGPath.bind(brush);
+      brush.convertPointsToSVGPath = function(points: any[]) {
+        if (points && points.length === 1) {
+          const p = points[0];
+          return [['M', p.x, p.y], ['L', p.x + 0.1, p.y + 0.1]] as any;
+        }
+        return originalConvert(points);
+      };
+
       canvas.freeDrawingBrush = brush;
       
       canvas.on('path:created', (opt: any) => {

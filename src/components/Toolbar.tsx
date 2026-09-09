@@ -18,7 +18,9 @@ import {
   Calculator,
   Trash2,
   CircleDot,
-  Check
+  Check,
+  Pin,
+  PinOff
 } from 'lucide-react';
 
 export const Toolbar: React.FC = () => {
@@ -27,10 +29,34 @@ export const Toolbar: React.FC = () => {
     isDarkMode, 
     canUndo, canRedo, undo, redo,
     eraserMode, setEraserMode,
-    eraserSize, setEraserSize
+    eraserSize, setEraserSize,
+    isToolbarAutoHide, toggleToolbarAutoHide
   } = useBoardStore();
   const [showEraserMenu, setShowEraserMenu] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
   const eraserMenuRef = useRef<HTMLDivElement>(null);
+  const hideTimeoutRef = useRef<any>(null);
+
+  const handleMouseEnter = () => {
+    if (hideTimeoutRef.current) {
+      clearTimeout(hideTimeoutRef.current);
+      hideTimeoutRef.current = null;
+    }
+    setIsHovered(true);
+  };
+
+  const handleMouseLeave = () => {
+    if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
+    hideTimeoutRef.current = setTimeout(() => {
+      setIsHovered(false);
+    }, 350);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -60,10 +86,41 @@ export const Toolbar: React.FC = () => {
     { id: 'text', icon: <Type size={20} />, tooltip: 'Text (T)' },
   ];
 
+  const isRevealed = !isToolbarAutoHide || isHovered || showEraserMenu;
+
   return (
-    <div className={`fixed bottom-6 left-1/2 transform -translate-x-1/2 flex items-center gap-1.5 p-2 rounded-xl shadow-lg border backdrop-blur-md transition-colors z-30 ${
-      isDarkMode ? 'bg-gray-800/80 border-gray-700 text-white' : 'bg-white/80 border-gray-200 text-gray-800'
-    }`}>
+    <>
+      {/* Bottom screen hover trigger zone when auto-hide is active */}
+      {isToolbarAutoHide && (
+        <div
+          onMouseEnter={handleMouseEnter}
+          className="fixed bottom-0 left-0 right-0 h-10 z-30 pointer-events-auto"
+        />
+      )}
+
+      {/* Peek Indicator Handle when auto-hidden */}
+      {isToolbarAutoHide && !isRevealed && (
+        <div
+          onClick={handleMouseEnter}
+          onMouseEnter={handleMouseEnter}
+          title="Hover or click to show Tool Tray"
+          className="fixed bottom-1.5 left-1/2 -translate-x-1/2 flex items-center justify-center py-1 px-4 rounded-full bg-indigo-600/30 hover:bg-indigo-600/60 text-indigo-300 backdrop-blur-md border border-indigo-500/30 shadow-md cursor-pointer transition-all duration-200 z-30 group"
+        >
+          <div className="w-10 h-1 rounded-full bg-indigo-400/80 group-hover:bg-indigo-200 transition-colors" />
+        </div>
+      )}
+
+      <div 
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        className={`fixed bottom-6 left-1/2 transform -translate-x-1/2 flex items-center gap-1.5 p-2 rounded-xl shadow-lg border backdrop-blur-md transition-all duration-300 ease-out z-30 ${
+          isDarkMode ? 'bg-gray-800/80 border-gray-700 text-white' : 'bg-white/80 border-gray-200 text-gray-800'
+        } ${
+          isToolbarAutoHide && !isRevealed
+            ? 'translate-y-[calc(100%+2.5rem)] opacity-0 pointer-events-none'
+            : 'translate-y-0 opacity-100 pointer-events-auto'
+        }`}
+      >
       {/* Undo Button */}
       <button
         type="button"
@@ -267,6 +324,24 @@ export const Toolbar: React.FC = () => {
           }}
         />
       </label>
+
+      {/* Vertical separator */}
+      <div className={`w-px mx-1 my-2 ${isDarkMode ? 'bg-gray-700' : 'bg-gray-300'}`}></div>
+
+      {/* Auto-Hide Tool Tray (Windows Taskbar Style) */}
+      <button
+        type="button"
+        onClick={toggleToolbarAutoHide}
+        className={`p-3 rounded-lg flex items-center justify-center transition-all ${
+          isToolbarAutoHide
+            ? (isDarkMode ? 'bg-indigo-600/30 text-indigo-400 hover:bg-indigo-600/50' : 'bg-indigo-100 text-indigo-600 hover:bg-indigo-200')
+            : (isDarkMode ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-100 text-gray-700')
+        }`}
+        title={isToolbarAutoHide ? 'Pin Tool Tray (Keep Always Visible)' : 'Auto-hide Tool Tray (Like Windows Taskbar)'}
+      >
+        {isToolbarAutoHide ? <PinOff size={20} /> : <Pin size={20} />}
+      </button>
     </div>
+    </>
   );
 };

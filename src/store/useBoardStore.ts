@@ -236,6 +236,11 @@ export interface BoardState {
   // Theme
   isDarkMode: boolean;
   toggleTheme: () => void;
+
+  // Tool Tray Auto-Hide (like Windows taskbar)
+  isToolbarAutoHide: boolean;
+  toggleToolbarAutoHide: () => void;
+  setToolbarAutoHide: (autoHide: boolean) => void;
 }
 
 // Debounced page save timer dictionary
@@ -812,7 +817,16 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     } else if (eventType === 'UPDATE' && newRow) {
       if (newRow.notebook_id === activeNotebookId) {
         // Prevent self-echo if this client authored the update
-        const isSelf = newRow.canvas_data && (newRow.canvas_data as any)._clientId === CLIENT_SESSION_ID;
+        let cd = newRow.canvas_data;
+        if (typeof cd === 'string') {
+          try {
+            cd = JSON.parse(cd);
+          } catch {}
+        }
+        const isSelf = cd && (cd as any)._clientId === CLIENT_SESSION_ID;
+        if (isSelf) {
+          return;
+        }
 
         const updatedPages = pages.map((p) => (p.id === newRow.id ? (newRow as PageRow) : p));
         set({ pages: updatedPages });
@@ -823,7 +837,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
           setIdbItem(pagesKey, updatedAll);
         });
 
-        if (!isSelf && newRow.id === currentPageId) {
+        if (newRow.id === currentPageId) {
           const bg = extractBgSettingsFromPage(newRow as PageRow);
           set({
             bgType: bg.bgType,
@@ -1176,4 +1190,19 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
   isDarkMode: true,
   toggleTheme: () => set((state) => ({ isDarkMode: !state.isDarkMode })),
+
+  isToolbarAutoHide: typeof window !== 'undefined' ? localStorage.getItem('nova_toolbar_autohide') === 'true' : false,
+  toggleToolbarAutoHide: () => set((state) => {
+    const next = !state.isToolbarAutoHide;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('nova_toolbar_autohide', String(next));
+    }
+    return { isToolbarAutoHide: next };
+  }),
+  setToolbarAutoHide: (autoHide) => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('nova_toolbar_autohide', String(autoHide));
+    }
+    set({ isToolbarAutoHide: autoHide });
+  },
 }));
