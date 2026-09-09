@@ -178,8 +178,9 @@ export interface BoardState {
   addPage: (userId: string) => Promise<void>;
   removePage: (id: string) => Promise<void>;
   switchPage: (id: string) => Promise<void>;
-  updatePageData: (id: string, canvasData: string) => Promise<void>;
+  updatePageData: (id: string, canvasData: string | any, explicitBg?: Partial<BgSettings>) => Promise<void>;
   importPdfPages: (pdfPages: { canvasData: string; name: string }[], afterPageId: string | null, userId: string) => Promise<void>;
+
 
   // Background & Page Size Settings
   bgType: PageBackgroundType;
@@ -930,9 +931,21 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     });
   },
 
-  updatePageData: async (id: string, canvasData: string) => {
-    const { bgType, bgColor, isRuled, ruleColor, pageSize, pageOrientation, activeUserId } = get();
-    const currentBg: BgSettings = { bgType, bgColor, isRuled, ruleColor, pageSize, pageOrientation };
+  updatePageData: async (id: string, canvasData: string | any, explicitBg?: Partial<BgSettings>) => {
+    const { bgType, bgColor, isRuled, ruleColor, pageSize, pageOrientation, activeUserId, pages, currentPageId } = get();
+    
+    // Determine background settings: if explicitBg given, apply it; otherwise if current active page, use active store settings; otherwise retain page's own settings!
+    const targetPage = pages.find((p) => p.id === id);
+    const targetExistingBg = extractBgSettingsFromPage(targetPage);
+
+    const currentBg: BgSettings = {
+      bgType: explicitBg?.bgType ?? (id === currentPageId ? bgType : targetExistingBg.bgType),
+      bgColor: explicitBg?.bgColor ?? (id === currentPageId ? bgColor : targetExistingBg.bgColor),
+      isRuled: explicitBg?.isRuled ?? (id === currentPageId ? isRuled : targetExistingBg.isRuled),
+      ruleColor: explicitBg?.ruleColor ?? (id === currentPageId ? ruleColor : targetExistingBg.ruleColor),
+      pageSize: explicitBg?.pageSize ?? (id === currentPageId ? pageSize : targetExistingBg.pageSize),
+      pageOrientation: explicitBg?.pageOrientation ?? (id === currentPageId ? pageOrientation : targetExistingBg.pageOrientation),
+    };
 
     let formattedData: any;
     if (typeof canvasData === 'string' && canvasData.trim()) {
@@ -942,7 +955,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         formattedData = { objects: [] };
       }
     } else if (canvasData && typeof canvasData === 'object') {
-      formattedData = canvasData;
+      formattedData = { ...canvasData };
     } else {
       formattedData = { objects: [] };
     }
@@ -1072,8 +1085,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const { currentPageId, pages } = get();
     if (currentPageId) {
       const curPage = pages.find((p) => p.id === currentPageId);
-      const rawData = curPage?.canvas_data ? JSON.stringify(curPage.canvas_data) : JSON.stringify({ objects: [] });
-      get().updatePageData(currentPageId, rawData);
+      const rawData = curPage?.canvas_data || { objects: [] };
+      get().updatePageData(currentPageId, rawData, { bgType: type });
     }
   },
 
@@ -1082,8 +1095,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const { currentPageId, pages } = get();
     if (currentPageId) {
       const curPage = pages.find((p) => p.id === currentPageId);
-      const rawData = curPage?.canvas_data ? JSON.stringify(curPage.canvas_data) : JSON.stringify({ objects: [] });
-      get().updatePageData(currentPageId, rawData);
+      const rawData = curPage?.canvas_data || { objects: [] };
+      get().updatePageData(currentPageId, rawData, { bgColor: color });
     }
   },
 
@@ -1092,8 +1105,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const { currentPageId, pages } = get();
     if (currentPageId) {
       const curPage = pages.find((p) => p.id === currentPageId);
-      const rawData = curPage?.canvas_data ? JSON.stringify(curPage.canvas_data) : JSON.stringify({ objects: [] });
-      get().updatePageData(currentPageId, rawData);
+      const rawData = curPage?.canvas_data || { objects: [] };
+      get().updatePageData(currentPageId, rawData, { isRuled: ruled });
     }
   },
 
@@ -1102,8 +1115,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const { currentPageId, pages } = get();
     if (currentPageId) {
       const curPage = pages.find((p) => p.id === currentPageId);
-      const rawData = curPage?.canvas_data ? JSON.stringify(curPage.canvas_data) : JSON.stringify({ objects: [] });
-      get().updatePageData(currentPageId, rawData);
+      const rawData = curPage?.canvas_data || { objects: [] };
+      get().updatePageData(currentPageId, rawData, { ruleColor: color });
     }
   },
 
@@ -1112,8 +1125,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const { currentPageId, pages } = get();
     if (currentPageId) {
       const curPage = pages.find((p) => p.id === currentPageId);
-      const rawData = curPage?.canvas_data ? JSON.stringify(curPage.canvas_data) : JSON.stringify({ objects: [] });
-      get().updatePageData(currentPageId, rawData);
+      const rawData = curPage?.canvas_data || { objects: [] };
+      get().updatePageData(currentPageId, rawData, { pageSize: size });
     }
   },
 
@@ -1122,8 +1135,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const { currentPageId, pages } = get();
     if (currentPageId) {
       const curPage = pages.find((p) => p.id === currentPageId);
-      const rawData = curPage?.canvas_data ? JSON.stringify(curPage.canvas_data) : JSON.stringify({ objects: [] });
-      get().updatePageData(currentPageId, rawData);
+      const rawData = curPage?.canvas_data || { objects: [] };
+      get().updatePageData(currentPageId, rawData, { pageOrientation: orientation });
     }
   },
 
