@@ -166,7 +166,7 @@ if (fabric.Textbox && fabric.Textbox.prototype) {
   // Split on all Unicode whitespace and non-breaking spaces
   (fabric.Textbox.prototype as any)._wordJoiners = /[\s\u00A0\u1680\u2000-\u200B\u202F\u205F\u3000]/;
 
-  // Custom wrapLine: true word-wrapping with break-word fallback
+  // Custom wrapLine: true word-wrapping with right clearance buffer and break-word fallback
   // Ensures words wrap cleanly at the box boundary and never get cut off at either side!
   (fabric.Textbox.prototype as any)._wrapLine = function(
     lineIndex: number,
@@ -181,18 +181,22 @@ if (fabric.Textbox && fabric.Textbox.prototype) {
     const lines: any[][] = [];
     let currentLine: any[] = [];
     let currentLineWidth = 0;
-    let nextWordOffset = 0;
     let isFirstWordOnLine = true;
 
-    // Available usable width for this line (leave a little breathing room)
-    const maxLineWidth = Math.max(30, desiredWidth - reservedSpace);
+    // Right clearance safety buffer: leaves comfortable breathing room inside the box
+    // so characters at the end of a line never touch or bleed over the border or get clipped.
+    // If a word doesn't fit within this safe area, it drops to the next line ("go under").
+    const fontSize = typeof this.fontSize === 'number' ? this.fontSize : 20;
+    const rightClearance = isSplitGrapheme ? 0 : Math.max(14, Math.round(fontSize * 0.45));
+    const maxLineWidth = Math.max(30, desiredWidth - reservedSpace - rightClearance);
     const words = wordsData?.[lineIndex] || [];
+
+    let wordStartOffset = 0;
 
     for (let i = 0; i < words.length; i++) {
       const { word, width: wordWidth } = words[i];
 
       if (isSplitGrapheme) {
-        nextWordOffset += word.length;
         currentLineWidth += wordWidth - charSpacing;
         if (currentLineWidth > maxLineWidth && !isFirstWordOnLine) {
           lines.push(currentLine);
@@ -204,35 +208,33 @@ if (fabric.Textbox && fabric.Textbox.prototype) {
         }
         currentLine = currentLine.concat(word);
         isFirstWordOnLine = false;
+        wordStartOffset += word.length;
         continue;
       }
 
-      // Word-based wrapping with emergency break-word fallback:
-      const spaceWidth = isFirstWordOnLine ? 0 : (this as any)._measureWord([spaceChar], lineIndex, nextWordOffset);
+      const spaceOffset = wordStartOffset > 0 ? wordStartOffset - 1 : 0;
+      const spaceWidth = isFirstWordOnLine ? 0 : (this as any)._measureWord([spaceChar], lineIndex, spaceOffset);
 
       if (wordWidth <= maxLineWidth) {
-        // Word fits on line: check if it overflows current line
+        // Normal word: if adding it causes the line to exceed maxLineWidth, wrap to next line ("go under")
         if (currentLineWidth + spaceWidth + wordWidth - charSpacing > maxLineWidth && !isFirstWordOnLine) {
           lines.push(currentLine);
           currentLine = [];
           currentLineWidth = wordWidth;
-          nextWordOffset += word.length;
           currentLine = currentLine.concat(word);
           isFirstWordOnLine = false;
         } else {
           if (!isFirstWordOnLine) {
             currentLine.push(spaceChar);
             currentLineWidth += spaceWidth;
-            nextWordOffset += 1;
           }
           currentLine = currentLine.concat(word);
           currentLineWidth += wordWidth;
-          nextWordOffset += word.length;
           isFirstWordOnLine = false;
         }
       } else {
-        // Overlong word (e.g. '___________', long URL, or unbroken token) exceeding entire box width:
-        // Break character-by-character so it never bleeds beyond the box boundaries!
+        // Overlong continuous token (e.g. continuous underscores '_______' or long unbroken string):
+        // Break character-by-character so it never bleeds beyond the box boundaries
         if (!isFirstWordOnLine) {
           lines.push(currentLine);
           currentLine = [];
@@ -241,9 +243,10 @@ if (fabric.Textbox && fabric.Textbox.prototype) {
         }
 
         const graphemes = this.graphemeSplit(Array.isArray(word) ? word.join('') : String(word));
+        let charOffset = wordStartOffset;
         for (let g = 0; g < graphemes.length; g++) {
           const gChar = graphemes[g];
-          const gWidth = (this as any)._measureWord([gChar], lineIndex, nextWordOffset);
+          const gWidth = (this as any)._measureWord([gChar], lineIndex, charOffset);
           if (currentLineWidth + gWidth > maxLineWidth && !isFirstWordOnLine) {
             lines.push(currentLine);
             currentLine = [];
@@ -252,10 +255,13 @@ if (fabric.Textbox && fabric.Textbox.prototype) {
           }
           currentLine.push(gChar);
           currentLineWidth += gWidth;
-          nextWordOffset += 1;
+          charOffset++;
           isFirstWordOnLine = false;
         }
       }
+
+      // Advance wordStartOffset for next word (+1 for space)
+      wordStartOffset += word.length + 1;
     }
 
     if (currentLine.length > 0) {
@@ -289,6 +295,9 @@ const normalizeTextObject = (obj: fabric.FabricObject) => {
     });
     textObj.lockScalingFlip = true;
     textObj.splitByGrapheme = false; // Wrap by full words with break-word fallback
+    if (typeof textObj.padding !== 'number' || textObj.padding < 6) {
+      textObj.padding = 6;
+    }
 
     const sx = textObj.scaleX ?? 1;
     const sy = textObj.scaleY ?? 1;
@@ -1703,13 +1712,15 @@ export const Board: React.FC = () => {
               const { width: pageW } = getPageDimensions(pageSize, pageOrientation);
               const pageCenterX = (canvas.width! - pageW) / 2;
               const margin = 28;
-              const maxBoxW = Math.min(680, Math.max(280, pageW - margin * 2));
+              const innerPadding = 24;
+              const maxBoxW = Math.min(640, Math.max(280, pageW - (margin + innerPadding) * 2));
 
               const currentFormat = useBoardStore.getState().activeTextFormat;
               const textbox = new fabric.Textbox(cleanText, {
-                left: pageCenterX + margin + 40,
+                left: pageCenterX + margin + innerPadding,
                 top: 150,
                 width: maxBoxW,
+                padding: 6,
                 fontSize: currentFormat?.fontSize || 20,
                 fontFamily: currentFormat?.fontFamily || 'Inter',
                 fill: currentFormat?.fill || (isDarkMode ? '#ffffff' : '#000000'),
@@ -2631,6 +2642,16 @@ export const Board: React.FC = () => {
         const corner = (e as any).transform?.corner;
         if (corner === 'mr' || corner === 'ml') {
           textObj.scaleY = 1;
+          if (textObj.scaleX && Math.abs(textObj.scaleX - 1) > 0.001) {
+            textObj.width = Math.max(60, Math.round((textObj.width || 200) * textObj.scaleX));
+            textObj.scaleX = 1;
+            (textObj as any).dynamicMinWidth = 0;
+            (textObj as any)._forceClearCache = true;
+            textObj.dirty = true;
+            if (typeof textObj.initDimensions === 'function') {
+              textObj.initDimensions();
+            }
+          }
         } else {
           const s = Math.max(textObj.scaleX || 1, textObj.scaleY || 1);
           textObj.scaleX = s;
@@ -2650,6 +2671,7 @@ export const Board: React.FC = () => {
           textObj.initDimensions();
         }
         textObj.setCoords();
+        canvas.requestRenderAll();
       }
     });
 
