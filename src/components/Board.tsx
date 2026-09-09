@@ -120,6 +120,99 @@ fabric.IText.prototype.insertNewStyleBlock = function(
 
 if (fabric.Textbox && fabric.Textbox.prototype) {
   fabric.Textbox.prototype.insertNewStyleBlock = fabric.IText.prototype.insertNewStyleBlock;
+
+  // Custom _wrapLine: Ensures words wrap strictly to the textbox boundary (desiredWidth).
+  // Native Fabric uses Math.max(desiredWidth, largestWordWidth, dynamicMinWidth), which inflates
+  // the wrapping width for ALL lines whenever any word in the text is wide.
+  // When sliding/resizing the box narrower, this caused normal words to get sliced by the sideline!
+  // By wrapping strictly to desiredWidth, any word that reaches the sideline drops to the next line!
+  (fabric.Textbox.prototype as any)._wrapLine = function(
+    lineIndex: number,
+    desiredWidth: number,
+    _ref: any,
+    reservedSpace: number = 0
+  ) {
+    const { wordsData } = _ref;
+    const additionalSpace = this._getWidthOfCharSpacing();
+    const splitByGrapheme = this.splitByGrapheme;
+    const graphemeLines: any[][] = [];
+    const infix = splitByGrapheme ? '' : ' ';
+    let lineWidth = 0;
+    let line: any[] = [];
+    let offset = 0;
+    let infixWidth = 0;
+    let lineJustStarted = true;
+
+    // Available width strictly constrained to desiredWidth
+    desiredWidth -= reservedSpace;
+    // Leave a comfortable 4px safety buffer so glyph edges/antialiasing never touch or get cut by the sideline
+    const maxWidth = Math.max(20, desiredWidth - 4);
+
+    const data = (wordsData && wordsData[lineIndex]) || [];
+    offset = 0;
+    let i = 0;
+    for (i = 0; i < data.length; i++) {
+      const { word, width: wordWidth } = data[i];
+      offset += word.length;
+      lineWidth += infixWidth + wordWidth - additionalSpace;
+
+      // If word exceeds maxWidth and the line already has content, drop the entire word to the next line!
+      if (lineWidth > maxWidth && !lineJustStarted) {
+        graphemeLines.push(line);
+        line = [];
+        lineWidth = wordWidth;
+        lineJustStarted = true;
+      } else {
+        lineWidth += additionalSpace;
+      }
+
+      // If an individual unbroken word is longer than the entire box width on a new line,
+      // break it character-by-character so it never bleeds beyond the box boundary!
+      if (wordWidth > maxWidth && lineJustStarted) {
+        const graphemes = splitByGrapheme
+          ? word
+          : (this.graphemeSplit ? this.graphemeSplit(Array.isArray(word) ? word.join('') : String(word)) : Array.from(String(word)));
+        let curPart: any[] = [];
+        let curPartW = 0;
+        let charOffset = offset - word.length;
+        for (let g = 0; g < graphemes.length; g++) {
+          const gChar = graphemes[g];
+          const gW = this._measureWord([gChar], lineIndex, charOffset);
+          if (curPartW + gW > maxWidth && curPart.length > 0) {
+            graphemeLines.push(curPart);
+            curPart = [];
+            curPartW = 0;
+          }
+          curPart.push(gChar);
+          curPartW += gW;
+          charOffset++;
+        }
+        if (curPart.length > 0) {
+          line = curPart;
+          lineWidth = curPartW;
+          lineJustStarted = false;
+        }
+        infixWidth = splitByGrapheme ? 0 : this._measureWord([infix], lineIndex, offset);
+        offset++;
+        continue;
+      }
+
+      if (!lineJustStarted && !splitByGrapheme) {
+        line.push(infix);
+      }
+      line = line.concat(word);
+      infixWidth = splitByGrapheme ? 0 : this._measureWord([infix], lineIndex, offset);
+      offset++;
+      lineJustStarted = false;
+    }
+    if (i && line.length > 0) {
+      graphemeLines.push(line);
+    }
+
+    // Keep dynamicMinWidth at 0 so Fabric never expands textbox.width against user's dragged width
+    this.dynamicMinWidth = 0;
+    return graphemeLines;
+  };
 }
 
 // Helper: Normalize Textbox dimensions, scale, and controls to prevent distortion
@@ -132,6 +225,9 @@ const normalizeTextObject = (obj: fabric.FabricObject) => {
     });
     textObj.lockScalingFlip = true;
     textObj.splitByGrapheme = false; // Always wrap full words, not individual characters
+    if (typeof textObj.padding !== 'number' || textObj.padding < 6) {
+      textObj.padding = 6;
+    }
 
     const sx = textObj.scaleX ?? 1;
     const sy = textObj.scaleY ?? 1;
@@ -2409,13 +2505,29 @@ export const Board: React.FC = () => {
       }
     });
 
-    // Ensure proportional scaling during resize
+    // Ensure proportional scaling during corner resize, but allow clean width adjustments on side handles
     canvas.on('object:scaling', (e) => {
       if (e.target && (e.target.type === 'textbox' || e.target.type === 'i-text')) {
         const textObj = e.target as fabric.Textbox;
-        const s = Math.max(textObj.scaleX || 1, textObj.scaleY || 1);
-        textObj.scaleX = s;
-        textObj.scaleY = s;
+        const corner = (e as any).transform?.corner;
+        if (corner === 'mr' || corner === 'ml') {
+          textObj.scaleY = 1;
+        } else {
+          const s = Math.max(textObj.scaleX || 1, textObj.scaleY || 1);
+          textObj.scaleX = s;
+          textObj.scaleY = s;
+        }
+      }
+    });
+
+    // Real-time reflow when user drags the side resize handle (sliding the area)
+    canvas.on('object:resizing', (e) => {
+      if (e.target && (e.target.type === 'textbox' || e.target.type === 'i-text')) {
+        const textObj = e.target as fabric.Textbox;
+        (textObj as any).dynamicMinWidth = 0;
+        textObj.initDimensions();
+        textObj.setCoords();
+        canvas.requestRenderAll();
       }
     });
 
