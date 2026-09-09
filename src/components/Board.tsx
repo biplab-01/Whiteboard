@@ -176,17 +176,27 @@ const normalizeTextObject = (obj: fabric.FabricObject) => {
     const sx = textObj.scaleX ?? 1;
     const sy = textObj.scaleY ?? 1;
     if (sx !== 1 || sy !== 1) {
-      const scale = sy !== 1 ? sy : sx;
-      const curFontSize = textObj.fontSize ?? 24;
-      const newFontSize = Math.max(8, Math.round(curFontSize * scale));
-      const curWidth = textObj.width ?? 200;
-      const newWidth = Math.max(40, Math.round((curWidth * sx) / scale));
-      textObj.set({
-        fontSize: newFontSize,
-        width: newWidth,
-        scaleX: 1,
-        scaleY: 1,
-      });
+      if (Math.abs(sx - sy) > 0.05 && sy === 1) {
+        // Horizontal side handle drag: adjust width cleanly
+        const curWidth = textObj.width ?? 200;
+        textObj.set({
+          width: Math.max(60, Math.round(curWidth * sx)),
+          scaleX: 1,
+          scaleY: 1,
+        });
+      } else {
+        // Proportional corner scale
+        const scale = Math.max(sx, sy);
+        const curFontSize = textObj.fontSize ?? 24;
+        const newFontSize = Math.max(8, Math.round(curFontSize * scale));
+        const curWidth = textObj.width ?? 200;
+        textObj.set({
+          fontSize: newFontSize,
+          width: Math.max(40, Math.round(curWidth * (sx / scale))),
+          scaleX: 1,
+          scaleY: 1,
+        });
+      }
       (textObj as any)._forceClearCache = true;
       textObj.dirty = true;
       if (typeof textObj.initDimensions === 'function') {
@@ -792,44 +802,6 @@ export const Board: React.FC = () => {
 
     // Initial render
     renderBackground(canvas);
-
-    // Load current page data if exists
-    if (currentPage?.canvas_data) {
-      const parsed = typeof currentPage.canvas_data === 'string'
-        ? JSON.parse(currentPage.canvas_data)
-        : currentPage.canvas_data;
-      canvas.loadFromJSON(parsed).then(() => {
-        const { width: pageW, height: pageH } = getPageDimensions(pageSize, pageOrientation);
-        const pageCenterX = (canvas.width! - pageW) / 2;
-        const pageCenterY = Math.max(50, (canvas.height! - pageH) / 2);
-
-        const userObjects = canvas.getObjects().filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
-        if (userObjects.length > 0) {
-          const minX = Math.min(...userObjects.map(o => o.left || 0));
-          if (minX < 150 && pageCenterX > 200) {
-            const shiftX = pageCenterX;
-            const shiftY = pageCenterY > 50 ? pageCenterY - 20 : 0;
-            userObjects.forEach(obj => {
-              obj.set({
-                left: (obj.left || 0) + shiftX,
-                top: (obj.top || 0) + shiftY,
-              });
-              obj.setCoords();
-            });
-          }
-        }
-
-        renderBackground(canvas);
-        canvas.requestRenderAll();
-        if (currentPageId) {
-          initPageHistory(currentPageId, getCanvasSnapshot(canvas));
-        }
-      });
-    } else {
-      if (currentPageId) {
-        initPageHistory(currentPageId, getCanvasSnapshot(canvas));
-      }
-    }
 
     // Selection formatting listeners (for both Text and Shapes)
     const handleSelectionUpdate = () => {
@@ -1836,8 +1808,12 @@ export const Board: React.FC = () => {
     // 1. If switching from an existing page, save that previous page's snapshot FIRST
     const previousPageId = activePageIdRef.current;
     if (previousPageId && previousPageId !== currentPageId) {
-      const prevSnapshot = getCanvasSnapshot(canvas);
-      useBoardStore.getState().updatePageData(previousPageId, prevSnapshot);
+      const userObjs = canvas.getObjects().filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
+      // Only save if canvas actually has user objects, never overwrite a page with an empty canvas!
+      if (userObjs.length > 0) {
+        const prevSnapshot = getCanvasSnapshot(canvas);
+        useBoardStore.getState().updatePageData(previousPageId, prevSnapshot);
+      }
     }
     activePageIdRef.current = currentPageId;
 
@@ -1865,13 +1841,54 @@ export const Board: React.FC = () => {
         canvas.loadFromJSON(parsed).then(() => {
           const liveTool = useBoardStore.getState().currentTool;
           const isSelect = liveTool === 'select';
+
+          const { width: pageW } = getPageDimensions(pageSize, pageOrientation);
+          const pageCenterX = (canvas.width! - pageW) / 2;
+          const margin = 28;
+          const maxTextW = pageW - margin * 2;
+
           canvas.forEachObject((obj) => {
             if ((obj as any).name !== 'a4-background' && (obj as any).name !== 'a4-ruled-line') {
               obj.selectable = isSelect;
               obj.evented = true;
               obj.strokeUniform = true;
+
               if (obj.type === 'textbox' || obj.type === 'i-text') {
                 normalizeTextObject(obj);
+
+                const tb = obj as fabric.Textbox;
+                const curW = tb.getScaledWidth();
+
+                // 1. Constrain width so text never bleeds over page margins
+                if (curW > maxTextW) {
+                  tb.set({
+                    width: maxTextW,
+                    scaleX: 1,
+                    scaleY: 1
+                  });
+                  (tb as any)._forceClearCache = true;
+                  tb.dirty = true;
+                  if (typeof tb.initDimensions === 'function') tb.initDimensions();
+                }
+
+                // 2. Fix boundary positioning so text is never cut off on the left or right
+                if (typeof tb.left === 'number') {
+                  if (tb.left < pageCenterX + margin || tb.left > pageCenterX + pageW - 60) {
+                    tb.set({ left: pageCenterX + margin });
+                  }
+                  if (tb.left + (tb.width || 0) > pageCenterX + pageW - margin) {
+                    tb.set({ left: Math.max(pageCenterX + margin, pageCenterX + pageW - margin - (tb.width || 0)) });
+                  }
+                }
+                tb.setCoords();
+              } else {
+                // If any drawing / writing was pushed off-screen (e.g. left < -100 or left > canvas.width + 200), pull it back onto document page
+                if (typeof obj.left === 'number') {
+                  if (obj.left < -100 || obj.left > (canvas.width || 1920) + 200) {
+                    obj.set({ left: pageCenterX + margin + 20 });
+                    obj.setCoords();
+                  }
+                }
               }
             }
           });
