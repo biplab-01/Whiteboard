@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '../lib/supabase';
 import type { Database } from '../lib/database.types';
 import { getIdbItem, setIdbItem, initIdbStorage, getUserStorageKey } from '../lib/idbStorage';
+import { useAuthStore } from './useAuthStore';
 
 type FolderRow = Database['public']['Tables']['folders']['Row'];
 type NotebookRow = Database['public']['Tables']['notebooks']['Row'];
@@ -107,6 +108,7 @@ export const STORAGE_KEYS = {
   PAGES: 'nova_pages',
   BG_SETTINGS: 'nova_bg_settings',
   PAGE_BG_SETTINGS: 'nova_page_bg_settings',
+  UNSYNCED_NOTEBOOKS: 'nova_unsynced_notebooks',
 };
 
 // Extract background and document dimensions from a PageRow object or canvas_data
@@ -147,16 +149,21 @@ export interface BoardState {
   // Library Data
   folders: FolderRow[];
   notebooks: NotebookRow[];
+  unsyncedNotebookIds: string[];
   activeNotebookId: string | null;
   activeUserId: string | null;
   loading: boolean;
   isSyncing: boolean;
   syncStatusText: string | null;
   syncProgress: number;
+  isAlreadySyncedModalOpen: boolean;
+  setIsAlreadySyncedModalOpen: (open: boolean) => void;
 
   // Library Actions
   fetchLibrary: (userId: string) => Promise<void>;
   syncAllNotebooks: (userId: string) => Promise<void>;
+  checkSyncStatus: (userId?: string) => Promise<void>;
+  triggerSyncOrShowModal: (userId?: string) => Promise<void>;
   createFolder: (name: string, userId: string) => Promise<void>;
   deleteFolder: (id: string) => Promise<void>;
   createNotebook: (name: string, folderId: string | null, userId: string) => Promise<string>;
@@ -255,12 +262,14 @@ if (typeof window !== 'undefined') {
     STORAGE_KEYS.PAGES,
     STORAGE_KEYS.PAGE_BG_SETTINGS,
     STORAGE_KEYS.BG_SETTINGS,
+    STORAGE_KEYS.UNSYNCED_NOTEBOOKS,
   ]);
 }
 
 export const useBoardStore = create<BoardState>((set, get) => ({
   folders: [],
   notebooks: [],
+  unsyncedNotebookIds: [],
   activeNotebookId: null,
   activeUserId: null,
   pages: [],
@@ -269,6 +278,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   isSyncing: false,
   syncStatusText: null,
   syncProgress: 0,
+  isAlreadySyncedModalOpen: false,
+  setIsAlreadySyncedModalOpen: (open: boolean) => set({ isAlreadySyncedModalOpen: open }),
 
   bgType: DEFAULT_BG_SETTINGS.bgType,
   bgColor: DEFAULT_BG_SETTINGS.bgColor,
@@ -282,16 +293,140 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
     const foldersKey = getUserStorageKey(userId, STORAGE_KEYS.FOLDERS);
     const notebooksKey = getUserStorageKey(userId, STORAGE_KEYS.NOTEBOOKS);
+    const unsyncedKey = getUserStorageKey(userId, STORAGE_KEYS.UNSYNCED_NOTEBOOKS);
 
     // Immediate local state hydration from user-scoped cache
     const cachedFolders = (await getIdbItem<FolderRow[]>(foldersKey, [])) || [];
     const cachedNotebooks = (await getIdbItem<NotebookRow[]>(notebooksKey, [])) || [];
-    set({ folders: cachedFolders, notebooks: cachedNotebooks });
+    const cachedUnsynced = (await getIdbItem<string[]>(unsyncedKey, [])) || [];
+    set({ folders: cachedFolders, notebooks: cachedNotebooks, unsyncedNotebookIds: cachedUnsynced });
+
+    if (isValidUUID(userId)) {
+      get().checkSyncStatus(userId);
+    } else {
+      set({ unsyncedNotebookIds: cachedNotebooks.map((n) => n.id) });
+    }
+  },
+
+  checkSyncStatus: async (userId?: string) => {
+    const uid = userId || get().activeUserId;
+    if (!uid || !isValidUUID(uid)) {
+      const allIds = get().notebooks.map((n) => n.id);
+      set({ unsyncedNotebookIds: allIds });
+      return;
+    }
+
+    try {
+      const pagesKey = getUserStorageKey(uid, STORAGE_KEYS.PAGES);
+      const localPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
+      const localNotebooks = get().notebooks;
+
+      // Query metadata only (lightweight & very fast)
+      const [remoteNbRes, remotePagesRes] = await Promise.all([
+        supabase.from('notebooks').select('id, name, folder_id, updated_at, created_at').eq('user_id', uid),
+        supabase.from('pages').select('id, notebook_id, updated_at, created_at').eq('user_id', uid),
+      ]);
+
+      if (remoteNbRes.error || remotePagesRes.error) return;
+
+      const remoteNbMap = new Map((remoteNbRes.data || []).map((n) => [n.id, n]));
+      const remotePagesMap = new Map((remotePagesRes.data || []).map((p) => [p.id, p]));
+
+      // Group local pages by notebook_id
+      const localPagesByNb = new Map<string, PageRow[]>();
+      localPages.forEach((p) => {
+        if (!p.notebook_id) return;
+        const list = localPagesByNb.get(p.notebook_id) || [];
+        list.push(p);
+        localPagesByNb.set(p.notebook_id, list);
+      });
+
+      // Group remote pages by notebook_id
+      const remotePagesByNb = new Map<string, any[]>();
+      (remotePagesRes.data || []).forEach((p) => {
+        if (!p.notebook_id) return;
+        const list = remotePagesByNb.get(p.notebook_id) || [];
+        list.push(p);
+        remotePagesByNb.set(p.notebook_id, list);
+      });
+
+      const unsynced = new Set<string>();
+
+      for (const nb of localNotebooks) {
+        const remoteNb = remoteNbMap.get(nb.id);
+        if (!remoteNb) {
+          unsynced.add(nb.id);
+          continue;
+        }
+
+        const localTime = new Date(nb.updated_at || nb.created_at || 0).getTime();
+        const remoteTime = new Date(remoteNb.updated_at || remoteNb.created_at || 0).getTime();
+        if (localTime > remoteTime + 500 || remoteNb.name !== nb.name || remoteNb.folder_id !== nb.folder_id) {
+          unsynced.add(nb.id);
+          continue;
+        }
+
+        const nbPages = localPagesByNb.get(nb.id) || [];
+        const remNbPages = remotePagesByNb.get(nb.id) || [];
+
+        let pagesSynced = true;
+        if (nbPages.length !== remNbPages.length) {
+          pagesSynced = false;
+        } else {
+          for (const lp of nbPages) {
+            const rp = remotePagesMap.get(lp.id);
+            if (!rp) {
+              pagesSynced = false;
+              break;
+            }
+            const lpTime = new Date(lp.updated_at || lp.created_at || 0).getTime();
+            const rpTime = new Date(rp.updated_at || rp.created_at || 0).getTime();
+            if (Math.abs(lpTime - rpTime) > 500) {
+              pagesSynced = false;
+              break;
+            }
+          }
+        }
+
+        if (!pagesSynced) {
+          unsynced.add(nb.id);
+        }
+      }
+
+      const unsyncedList = Array.from(unsynced);
+      set({ unsyncedNotebookIds: unsyncedList });
+      const unsyncedKey = getUserStorageKey(uid, STORAGE_KEYS.UNSYNCED_NOTEBOOKS);
+      await setIdbItem(unsyncedKey, unsyncedList);
+    } catch (e) {
+      console.warn('checkSyncStatus error:', e);
+    }
+  },
+
+  triggerSyncOrShowModal: async (userId?: string) => {
+    const uid = userId || get().activeUserId;
+    if (!uid || !isValidUUID(uid)) {
+      useAuthStore.getState().setShowAuthModal(true);
+      return;
+    }
+
+    const { unsyncedNotebookIds, notebooks, isSyncing, syncAllNotebooks } = get();
+    if (isSyncing) return;
+
+    const currentNotebookIds = new Set(notebooks.map((n) => n.id));
+    const activeUnsynced = unsyncedNotebookIds.filter((id) => currentNotebookIds.has(id));
+
+    if (activeUnsynced.length === 0) {
+      // Everything is already backed up and synced!
+      set({ isAlreadySyncedModalOpen: true });
+      return;
+    }
+
+    await syncAllNotebooks(uid);
   },
 
   syncAllNotebooks: async (userId: string) => {
     const isAuthUser = isValidUUID(userId);
-    set({ isSyncing: true, syncProgress: 5, syncStatusText: 'Starting sync (5%)...' });
+    set({ isSyncing: true, syncProgress: 5, syncStatusText: 'Checking cloud updates (5%)...' });
 
     if (!isAuthUser) {
       set({ isSyncing: false, syncProgress: 0, syncStatusText: 'Local storage (Sign in to sync)' });
@@ -309,24 +444,93 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const localPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
       const validPages = localPages.filter((p) => p.notebook_id && isValidUUID(p.notebook_id));
 
-      const totalUnits = Math.max(1, localFolders.length + localNotebooks.length + validPages.length + 4);
-      let doneUnits = 0;
+      // 1. Fetch remote metadata only (omit canvas_data to keep network transfer fast & lightweight)
+      set({ syncProgress: 12, syncStatusText: 'Checking cloud records (12%)...' });
+      const [foldersRes, notebooksRes, remotePagesMetaRes] = await Promise.all([
+        supabase.from('folders').select('*').eq('user_id', userId).order('created_at', { ascending: true }),
+        supabase.from('notebooks').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
+        supabase
+          .from('pages')
+          .select('id, notebook_id, user_id, name, order_index, created_at, updated_at')
+          .eq('user_id', userId)
+          .order('order_index', { ascending: true }),
+      ]);
 
-      // 1. Push local folders to Supabase
-      for (const f of localFolders) {
+      if (foldersRes.error) throw foldersRes.error;
+      if (notebooksRes.error) throw notebooksRes.error;
+      if (remotePagesMetaRes.error) throw remotePagesMetaRes.error;
+
+      const remoteFolders = foldersRes.data || [];
+      const remoteNotebooks = notebooksRes.data || [];
+      const remotePagesMeta = remotePagesMetaRes.data || [];
+
+      const remoteFolderMap = new Map(remoteFolders.map((f) => [f.id, f]));
+      const remoteNotebookMap = new Map(remoteNotebooks.map((nb) => [nb.id, nb]));
+      const remotePageMetaMap = new Map(remotePagesMeta.map((p) => [p.id, p]));
+
+      const localPageMap = new Map(validPages.map((p) => [p.id, p]));
+
+      // 2. Identify dirty/new local records to push to cloud
+      // Folders to push
+      const foldersToPush = localFolders.filter((f) => {
+        const remote = remoteFolderMap.get(f.id);
+        if (!remote) return true;
+        return remote.name !== f.name;
+      });
+
+      // Notebooks to push: new OR local updated_at > remote updated_at OR folder changed
+      const notebooksToPush = localNotebooks.filter((nb) => {
+        const remote = remoteNotebookMap.get(nb.id);
+        if (!remote) return true;
+        const localTime = new Date(nb.updated_at || nb.created_at || 0).getTime();
+        const remoteTime = new Date(remote.updated_at || remote.created_at || 0).getTime();
+        return localTime > remoteTime + 500 || remote.name !== nb.name || remote.folder_id !== nb.folder_id;
+      });
+
+      // Pages to push: only new pages OR pages modified locally after cloud version
+      const pagesToPush = validPages.filter((p) => {
+        const remote = remotePageMetaMap.get(p.id);
+        if (!remote) return true;
+        const localTime = new Date(p.updated_at || p.created_at || 0).getTime();
+        const remoteTime = new Date(remote.updated_at || remote.created_at || 0).getTime();
+        // Allow a 500ms grace window to avoid microsecond rounding diffs
+        return localTime > remoteTime + 500;
+      });
+
+      // 3. Identify remote pages to download: new in cloud or cloud updated_at is newer
+      const pageIdsToDownload: string[] = [];
+      for (const remoteP of remotePagesMeta) {
+        const localP = localPageMap.get(remoteP.id);
+        if (!localP) {
+          pageIdsToDownload.push(remoteP.id);
+        } else {
+          const localTime = new Date(localP.updated_at || localP.created_at || 0).getTime();
+          const remoteTime = new Date(remoteP.updated_at || remoteP.created_at || 0).getTime();
+          if (remoteTime > localTime + 500) {
+            pageIdsToDownload.push(remoteP.id);
+          }
+        }
+      }
+
+      const totalPushUnits = foldersToPush.length + notebooksToPush.length + pagesToPush.length;
+      let completedUnits = 0;
+      const totalUnits = Math.max(1, totalPushUnits + (pageIdsToDownload.length > 0 ? 5 : 1));
+
+      // Push Folders (incremental)
+      for (const f of foldersToPush) {
         await supabase.from('folders').upsert({
           id: f.id,
           name: f.name,
           user_id: userId,
           created_at: f.created_at || new Date().toISOString(),
         });
-        doneUnits++;
-        const pct = Math.min(99, Math.round((doneUnits / totalUnits) * 100));
-        set({ syncProgress: pct, syncStatusText: `Syncing folders (${pct}%)...` });
+        completedUnits++;
+        const pct = Math.min(85, Math.round(15 + (completedUnits / totalUnits) * 70));
+        set({ syncProgress: pct, syncStatusText: `Syncing folders (${completedUnits}/${totalPushUnits})...` });
       }
 
-      // 2. Push local notebooks to Supabase
-      for (const nb of localNotebooks) {
+      // Push Notebooks (incremental)
+      for (const nb of notebooksToPush) {
         await supabase.from('notebooks').upsert({
           id: nb.id,
           name: nb.name,
@@ -335,15 +539,15 @@ export const useBoardStore = create<BoardState>((set, get) => ({
           created_at: nb.created_at || new Date().toISOString(),
           updated_at: nb.updated_at || new Date().toISOString(),
         });
-        doneUnits++;
-        const pct = Math.min(99, Math.round((doneUnits / totalUnits) * 100));
-        set({ syncProgress: pct, syncStatusText: `Syncing notebooks (${pct}%)...` });
+        completedUnits++;
+        const pct = Math.min(85, Math.round(15 + (completedUnits / totalUnits) * 70));
+        set({ syncProgress: pct, syncStatusText: `Syncing notebooks (${completedUnits}/${totalPushUnits})...` });
       }
 
-      // 3. Push local pages to Supabase in batches of 5
+      // Push Pages (incremental in batches of 5)
       const BATCH_SIZE = 5;
-      for (let i = 0; i < validPages.length; i += BATCH_SIZE) {
-        const batch = validPages.slice(i, i + BATCH_SIZE);
+      for (let i = 0; i < pagesToPush.length; i += BATCH_SIZE) {
+        const batch = pagesToPush.slice(i, i + BATCH_SIZE);
         await Promise.all(
           batch.map((p) => {
             let formattedData = p.canvas_data;
@@ -364,55 +568,93 @@ export const useBoardStore = create<BoardState>((set, get) => ({
             });
           })
         );
-        doneUnits += batch.length;
-        const currentCount = Math.min(i + BATCH_SIZE, validPages.length);
-        const pct = Math.min(99, Math.round((doneUnits / totalUnits) * 100));
-        set({ syncProgress: pct, syncStatusText: `Syncing pages ${currentCount}/${validPages.length} (${pct}%)...` });
+        completedUnits += batch.length;
+        const currentCount = Math.min(i + BATCH_SIZE, pagesToPush.length);
+        const pct = Math.min(85, Math.round(15 + (completedUnits / totalUnits) * 70));
+        set({ syncProgress: pct, syncStatusText: `Syncing new/modified pages ${currentCount}/${pagesToPush.length} (${pct}%)...` });
       }
 
-      // 4. Fetch all remote records from Supabase
-      doneUnits += 2;
-      const downloadPct = Math.min(95, Math.round((doneUnits / totalUnits) * 100));
-      set({ syncProgress: downloadPct, syncStatusText: `Downloading updates (${downloadPct}%)...` });
+      // 4. Download only new/modified pages from Supabase
+      let freshlyDownloadedPages: PageRow[] = [];
+      if (pageIdsToDownload.length > 0) {
+        set({ syncProgress: 88, syncStatusText: `Downloading ${pageIdsToDownload.length} cloud update(s)...` });
+        const DOWNLOAD_BATCH = 20;
+        for (let i = 0; i < pageIdsToDownload.length; i += DOWNLOAD_BATCH) {
+          const idsBatch = pageIdsToDownload.slice(i, i + DOWNLOAD_BATCH);
+          const dlRes = await supabase.from('pages').select('*').in('id', idsBatch);
+          if (dlRes.data) {
+            freshlyDownloadedPages.push(...dlRes.data);
+          }
+        }
+      }
 
-      const [foldersRes, notebooksRes, pagesRes] = await Promise.all([
-        supabase.from('folders').select('*').eq('user_id', userId).order('created_at', { ascending: true }),
-        supabase.from('notebooks').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
-        supabase.from('pages').select('*').eq('user_id', userId).order('order_index', { ascending: true }),
-      ]);
-
-      const remoteFolders = foldersRes.data || [];
-      const remoteNotebooks = notebooksRes.data || [];
-      const remotePages = pagesRes.data || [];
-
-      // Merge remote and local maps
+      // 5. Merge remote and local records
       const foldersMap = new Map<string, FolderRow>();
       remoteFolders.forEach((f) => foldersMap.set(f.id, f));
-      localFolders.forEach((f) => { if (!foldersMap.has(f.id)) foldersMap.set(f.id, f); });
+      localFolders.forEach((f) => foldersMap.set(f.id, f));
       const mergedFolders = Array.from(foldersMap.values());
 
       const notebooksMap = new Map<string, NotebookRow>();
       remoteNotebooks.forEach((n) => notebooksMap.set(n.id, n));
-      localNotebooks.forEach((n) => { if (!notebooksMap.has(n.id)) notebooksMap.set(n.id, n); });
+      localNotebooks.forEach((n) => {
+        const remote = notebooksMap.get(n.id);
+        if (!remote) {
+          notebooksMap.set(n.id, n);
+        } else {
+          const localTime = new Date(n.updated_at || n.created_at || 0).getTime();
+          const remoteTime = new Date(remote.updated_at || remote.created_at || 0).getTime();
+          if (localTime >= remoteTime) {
+            notebooksMap.set(n.id, n);
+          }
+        }
+      });
       const mergedNotebooks = Array.from(notebooksMap.values());
 
+      // Pages: keep existing local pages, apply freshly downloaded newer pages
       const pagesMap = new Map<string, PageRow>();
-      remotePages.forEach((p) => pagesMap.set(p.id, p));
-      localPages.forEach((p) => { if (!pagesMap.has(p.id)) pagesMap.set(p.id, p); });
+      localPages.forEach((p) => pagesMap.set(p.id, p));
+      freshlyDownloadedPages.forEach((p) => pagesMap.set(p.id, p));
       const mergedPages = Array.from(pagesMap.values());
+
+      const pushedCount = foldersToPush.length + notebooksToPush.length + pagesToPush.length;
+      const pulledCount = pageIdsToDownload.length;
+
+      let statusMsg = `Synced 100% (${mergedNotebooks.length} notebooks)`;
+      if (pushedCount === 0 && pulledCount === 0) {
+        statusMsg = 'All notebooks are up to date';
+      } else if (pushedCount > 0 && pulledCount === 0) {
+        statusMsg = `Uploaded ${pushedCount} item${pushedCount > 1 ? 's' : ''} to cloud`;
+      } else if (pushedCount === 0 && pulledCount > 0) {
+        statusMsg = `Downloaded ${pulledCount} update${pulledCount > 1 ? 's' : ''}`;
+      } else {
+        statusMsg = `Synced (${pushedCount} uploaded, ${pulledCount} downloaded)`;
+      }
+
+      const unsyncedKey = getUserStorageKey(userId, STORAGE_KEYS.UNSYNCED_NOTEBOOKS);
 
       set({
         folders: mergedFolders,
         notebooks: mergedNotebooks,
+        unsyncedNotebookIds: [],
         isSyncing: false,
         syncProgress: 100,
-        syncStatusText: `Synced 100% (${mergedNotebooks.length} notebooks)`,
+        syncStatusText: statusMsg,
       });
+
+      // If active notebook is open, refresh active pages if any updates were downloaded
+      const { activeNotebookId } = get();
+      if (activeNotebookId && freshlyDownloadedPages.some((p) => p.notebook_id === activeNotebookId)) {
+        const activePages = mergedPages
+          .filter((p) => p.notebook_id === activeNotebookId)
+          .sort((a, b) => a.order_index - b.order_index);
+        set({ pages: activePages });
+      }
 
       await Promise.all([
         setIdbItem(foldersKey, mergedFolders),
         setIdbItem(notebooksKey, mergedNotebooks),
         setIdbItem(pagesKey, mergedPages),
+        setIdbItem(unsyncedKey, []),
       ]);
 
       setTimeout(() => set({ syncStatusText: null, syncProgress: 0 }), 3500);
@@ -450,6 +692,14 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const foldersKey = getUserStorageKey(activeUserId, STORAGE_KEYS.FOLDERS);
     const notebooksKey = getUserStorageKey(activeUserId, STORAGE_KEYS.NOTEBOOKS);
     await Promise.all([setIdbItem(foldersKey, updatedFolders), setIdbItem(notebooksKey, updatedNotebooks)]);
+
+    if (activeUserId && isValidUUID(activeUserId) && isValidUUID(folderId)) {
+      try {
+        await supabase.from('folders').delete().eq('id', folderId);
+      } catch (e) {
+        console.warn('Error deleting folder from cloud:', e);
+      }
+    }
   },
 
   createNotebook: async (name: string, folderId: string | null, userId: string) => {
@@ -467,10 +717,15 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     };
 
     const updatedNotebooks = [newNotebook, ...get().notebooks];
-    set({ notebooks: updatedNotebooks, activeUserId: userId });
+    const updatedUnsynced = Array.from(new Set([...get().unsyncedNotebookIds, notebookId]));
+    set({ notebooks: updatedNotebooks, activeUserId: userId, unsyncedNotebookIds: updatedUnsynced });
 
     const notebooksKey = getUserStorageKey(userId, STORAGE_KEYS.NOTEBOOKS);
-    await setIdbItem(notebooksKey, updatedNotebooks);
+    const unsyncedKey = getUserStorageKey(userId, STORAGE_KEYS.UNSYNCED_NOTEBOOKS);
+    await Promise.all([
+      setIdbItem(notebooksKey, updatedNotebooks),
+      setIdbItem(unsyncedKey, updatedUnsynced),
+    ]);
 
     // Prepare default Page 1
     const defaultPageId = generateUUID();
@@ -512,10 +767,15 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     };
 
     const updatedNotebooks = [newNotebook, ...get().notebooks];
-    set({ notebooks: updatedNotebooks, activeUserId: userId });
+    const updatedUnsynced = Array.from(new Set([...get().unsyncedNotebookIds, notebookId]));
+    set({ notebooks: updatedNotebooks, activeUserId: userId, unsyncedNotebookIds: updatedUnsynced });
 
     const notebooksKey = getUserStorageKey(userId, STORAGE_KEYS.NOTEBOOKS);
-    await setIdbItem(notebooksKey, updatedNotebooks);
+    const unsyncedKey = getUserStorageKey(userId, STORAGE_KEYS.UNSYNCED_NOTEBOOKS);
+    await Promise.all([
+      setIdbItem(notebooksKey, updatedNotebooks),
+      setIdbItem(unsyncedKey, updatedUnsynced),
+    ]);
 
     const defaultBg: BgSettings = {
       bgType: 'none',
@@ -565,16 +825,22 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const { notebooks, activeUserId } = get();
 
     const updated = notebooks.map((n) => (n.id === id ? { ...n, name: cleanName, updated_at: now } : n));
-    set({ notebooks: updated });
+    const updatedUnsynced = Array.from(new Set([...get().unsyncedNotebookIds, id]));
+    set({ notebooks: updated, unsyncedNotebookIds: updatedUnsynced });
 
     const notebooksKey = getUserStorageKey(activeUserId, STORAGE_KEYS.NOTEBOOKS);
-    await setIdbItem(notebooksKey, updated);
+    const unsyncedKey = getUserStorageKey(activeUserId, STORAGE_KEYS.UNSYNCED_NOTEBOOKS);
+    await Promise.all([
+      setIdbItem(notebooksKey, updated),
+      setIdbItem(unsyncedKey, updatedUnsynced),
+    ]);
   },
 
   deleteNotebook: async (id: string) => {
     const { notebooks, activeNotebookId, activeUserId } = get();
     const updated = notebooks.filter((n) => n.id !== id);
-    set({ notebooks: updated });
+    const updatedUnsynced = get().unsyncedNotebookIds.filter((nid) => nid !== id);
+    set({ notebooks: updated, unsyncedNotebookIds: updatedUnsynced });
 
     if (activeNotebookId === id) {
       set({ activeNotebookId: null, pages: [], currentPageId: null });
@@ -582,11 +848,25 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
     const notebooksKey = getUserStorageKey(activeUserId, STORAGE_KEYS.NOTEBOOKS);
     const pagesKey = getUserStorageKey(activeUserId, STORAGE_KEYS.PAGES);
+    const unsyncedKey = getUserStorageKey(activeUserId, STORAGE_KEYS.UNSYNCED_NOTEBOOKS);
 
     const allPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
     const prunedPages = allPages.filter((p) => p.notebook_id !== id);
 
-    await Promise.all([setIdbItem(notebooksKey, updated), setIdbItem(pagesKey, prunedPages)]);
+    await Promise.all([
+      setIdbItem(notebooksKey, updated),
+      setIdbItem(pagesKey, prunedPages),
+      setIdbItem(unsyncedKey, updatedUnsynced),
+    ]);
+
+    if (activeUserId && isValidUUID(activeUserId) && isValidUUID(id)) {
+      try {
+        await supabase.from('pages').delete().eq('notebook_id', id);
+        await supabase.from('notebooks').delete().eq('id', id);
+      } catch (e) {
+        console.warn('Error deleting notebook from cloud:', e);
+      }
+    }
   },
 
   moveNotebook: async (notebookId: string, folderId: string | null) => {
@@ -594,10 +874,15 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const { notebooks, activeUserId } = get();
 
     const updated = notebooks.map((n) => (n.id === notebookId ? { ...n, folder_id: validFolderId } : n));
-    set({ notebooks: updated });
+    const updatedUnsynced = Array.from(new Set([...get().unsyncedNotebookIds, notebookId]));
+    set({ notebooks: updated, unsyncedNotebookIds: updatedUnsynced });
 
     const notebooksKey = getUserStorageKey(activeUserId, STORAGE_KEYS.NOTEBOOKS);
-    await setIdbItem(notebooksKey, updated);
+    const unsyncedKey = getUserStorageKey(activeUserId, STORAGE_KEYS.UNSYNCED_NOTEBOOKS);
+    await Promise.all([
+      setIdbItem(notebooksKey, updated),
+      setIdbItem(unsyncedKey, updatedUnsynced),
+    ]);
   },
 
   openNotebook: async (id: string, customUserId?: string) => {
@@ -894,25 +1179,43 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     };
 
     const updatedPages = [...pages, newPage];
-    set({ pages: updatedPages, currentPageId: newPage.id });
+    const updatedUnsynced = Array.from(new Set([...get().unsyncedNotebookIds, activeNotebookId]));
+    set({ pages: updatedPages, currentPageId: newPage.id, unsyncedNotebookIds: updatedUnsynced });
 
     const pagesKey = getUserStorageKey(userId, STORAGE_KEYS.PAGES);
+    const unsyncedKey = getUserStorageKey(userId, STORAGE_KEYS.UNSYNCED_NOTEBOOKS);
     const allPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
-    await setIdbItem(pagesKey, [...allPages, newPage]);
+    await Promise.all([
+      setIdbItem(pagesKey, [...allPages, newPage]),
+      setIdbItem(unsyncedKey, updatedUnsynced),
+    ]);
   },
 
   removePage: async (id: string) => {
-    const { pages, currentPageId, activeUserId } = get();
+    const { pages, currentPageId, activeUserId, activeNotebookId } = get();
     if (pages.length <= 1) return; // Retain at least 1 page
 
     const newPages = pages.filter((p) => p.id !== id);
     const newCurrentPageId = currentPageId === id ? newPages[newPages.length - 1].id : currentPageId;
 
-    set({ pages: newPages, currentPageId: newCurrentPageId });
+    const updatedUnsynced = activeNotebookId ? Array.from(new Set([...get().unsyncedNotebookIds, activeNotebookId])) : get().unsyncedNotebookIds;
+    set({ pages: newPages, currentPageId: newCurrentPageId, unsyncedNotebookIds: updatedUnsynced });
 
     const pagesKey = getUserStorageKey(activeUserId, STORAGE_KEYS.PAGES);
+    const unsyncedKey = getUserStorageKey(activeUserId, STORAGE_KEYS.UNSYNCED_NOTEBOOKS);
     const allPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
-    await setIdbItem(pagesKey, allPages.filter((p) => p.id !== id));
+    await Promise.all([
+      setIdbItem(pagesKey, allPages.filter((p) => p.id !== id)),
+      setIdbItem(unsyncedKey, updatedUnsynced),
+    ]);
+
+    if (activeUserId && isValidUUID(activeUserId) && isValidUUID(id)) {
+      try {
+        await supabase.from('pages').delete().eq('id', id);
+      } catch (e) {
+        console.warn('Error deleting page from cloud:', e);
+      }
+    }
   },
 
   switchPage: async (id: string) => {
@@ -968,7 +1271,13 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const updatedPages = get().pages.map((p) => (p.id === id ? { ...p, canvas_data: formattedData, updated_at: now } : p));
     
     // Instant synchronous in-memory store update (0ms UI latency)
-    set({ pages: updatedPages });
+    const pageObj = get().pages.find((p) => p.id === id);
+    const targetNbId = pageObj?.notebook_id || get().activeNotebookId;
+    const updatedUnsynced = targetNbId 
+      ? Array.from(new Set([...get().unsyncedNotebookIds, targetNbId]))
+      : get().unsyncedNotebookIds;
+
+    set({ pages: updatedPages, unsyncedNotebookIds: updatedUnsynced });
 
     // Debounce IndexedDB persistent storage write so page transitions are lightning fast
     if (pageSaveTimers[id]) {
@@ -978,13 +1287,17 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       delete pageSaveTimers[id];
       try {
         const pagesKey = getUserStorageKey(activeUserId, STORAGE_KEYS.PAGES);
+        const unsyncedKey = getUserStorageKey(activeUserId, STORAGE_KEYS.UNSYNCED_NOTEBOOKS);
         const allPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
         const updatedAllPages = allPages.map((p) => (p.id === id ? { ...p, canvas_data: formattedData, updated_at: now } : p));
         if (!updatedAllPages.some((p) => p.id === id)) {
           const pToAdd = updatedPages.find((p) => p.id === id);
           if (pToAdd) updatedAllPages.push(pToAdd);
         }
-        await setIdbItem(pagesKey, updatedAllPages);
+        await Promise.all([
+          setIdbItem(pagesKey, updatedAllPages),
+          setIdbItem(unsyncedKey, updatedUnsynced),
+        ]);
       } catch (e) {
         console.warn('Background page save error:', e);
       }
@@ -1063,6 +1376,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     }
 
     const firstNewPageId = newCreatedPages[0].id;
+    const updatedUnsynced = Array.from(new Set([...get().unsyncedNotebookIds, activeNotebookId]));
     set({
       pages: combined,
       currentPageId: firstNewPageId,
@@ -1072,12 +1386,17 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       ruleColor: defaultBg.ruleColor,
       pageSize: defaultBg.pageSize || 'a4',
       pageOrientation: defaultBg.pageOrientation || 'portrait',
+      unsyncedNotebookIds: updatedUnsynced,
     });
 
     const pagesKey = getUserStorageKey(userId, STORAGE_KEYS.PAGES);
+    const unsyncedKey = getUserStorageKey(userId, STORAGE_KEYS.UNSYNCED_NOTEBOOKS);
     const allPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
     const otherNotebookPages = allPages.filter((p) => p.notebook_id !== activeNotebookId);
-    await setIdbItem(pagesKey, [...otherNotebookPages, ...combined]);
+    await Promise.all([
+      setIdbItem(pagesKey, [...otherNotebookPages, ...combined]),
+      setIdbItem(unsyncedKey, updatedUnsynced),
+    ]);
   },
 
   setBgType: (type) => {

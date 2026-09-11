@@ -1,18 +1,23 @@
 import { useState, useRef, useEffect } from 'react';
-import { BookOpen, FolderInput, Trash2, Folder as FolderIcon, Inbox, Check, Edit2 } from 'lucide-react';
+import { BookOpen, FolderInput, Trash2, Folder as FolderIcon, Inbox, Check, Edit2, CloudUpload, CloudOff } from 'lucide-react';
 import { useBoardStore } from '../../store/useBoardStore';
+import { useAuthStore } from '../../store/useAuthStore';
 
 interface NotebookCardProps {
   notebook: any;
 }
 
 export const NotebookCard = ({ notebook }: NotebookCardProps) => {
-  const { openNotebook, deleteNotebook, isDarkMode, folders, moveNotebook, renameNotebook } = useBoardStore();
+  const { openNotebook, deleteNotebook, isDarkMode, folders, moveNotebook, renameNotebook, unsyncedNotebookIds } = useBoardStore();
+  const { user } = useAuthStore();
   const [showFolderMenu, setShowFolderMenu] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [newName, setNewName] = useState(notebook.name);
   const menuRef = useRef<HTMLDivElement>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
+
+  const isAuth = Boolean(user?.id && !user.is_anonymous);
+  const isNotebookSynced = isAuth && !unsyncedNotebookIds.includes(notebook.id);
 
   useEffect(() => {
     setNewName(notebook.name);
@@ -75,6 +80,45 @@ export const NotebookCard = ({ notebook }: NotebookCardProps) => {
             isDarkMode ? 'bg-indigo-950/60 border-indigo-500/30 text-indigo-300' : 'bg-indigo-50 border-indigo-200 text-indigo-700'
           }`}>
             <FolderIcon size={10} /> {currentFolder.name}
+          </span>
+        )}
+
+        {/* Notebook Cloud Sync Status Indicator */}
+        {isAuth ? (
+          isNotebookSynced ? (
+            <span 
+              className={`absolute top-3 right-3 text-[10px] font-semibold px-2 py-0.5 rounded-md flex items-center gap-1 border transition-all ${
+                isDarkMode 
+                  ? 'bg-emerald-950/60 border-emerald-500/30 text-emerald-300' 
+                  : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+              }`}
+              title="Backed up & synced to cloud"
+            >
+              <Check size={10} className="text-emerald-400" />
+              <span className="hidden group-hover:inline transition-all">Synced</span>
+            </span>
+          ) : (
+            <span 
+              className={`absolute top-3 right-3 text-[10px] font-semibold px-2 py-0.5 rounded-md flex items-center gap-1 border transition-all shadow-xs ${
+                isDarkMode 
+                  ? 'bg-amber-950/60 border-amber-500/40 text-amber-300' 
+                  : 'bg-amber-50 border-amber-300 text-amber-700'
+              }`}
+              title="Unsaved changes not yet backed up to cloud"
+            >
+              <CloudUpload size={10} className="text-amber-400" />
+              <span>Not synced</span>
+            </span>
+          )
+        ) : (
+          <span 
+            className={`absolute top-3 right-3 text-[10px] font-medium px-2 py-0.5 rounded-md flex items-center gap-1 border opacity-50 group-hover:opacity-100 transition-opacity ${
+              isDarkMode ? 'bg-gray-800 border-gray-700 text-gray-400' : 'bg-gray-100 border-gray-200 text-gray-500'
+            }`}
+            title="Stored locally on this device"
+          >
+            <CloudOff size={10} />
+            <span className="hidden group-hover:inline">Local</span>
           </span>
         )}
       </div>

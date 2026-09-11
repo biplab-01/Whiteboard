@@ -5,6 +5,7 @@ import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 import { NotebookGrid } from './NotebookGrid';
 import { ImportDocsModal } from './ImportDocsModal';
+import { AlreadySyncedModal } from '../AlreadySyncedModal';
 
 export const Dashboard = () => {
   const { user } = useAuthStore();
@@ -46,6 +47,8 @@ export const Dashboard = () => {
         onClose={() => setShowImportModal(false)} 
         initialFolderId={currentView === 'all' || currentView === 'unfiled' ? null : currentView}
       />
+
+      <AlreadySyncedModal />
     </div>
   );
 };

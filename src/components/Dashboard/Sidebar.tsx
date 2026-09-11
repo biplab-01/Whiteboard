@@ -1,4 +1,4 @@
-import { Book, Folder as FolderIcon, Inbox, Plus, Trash2, AlertCircle } from 'lucide-react';
+import { Book, Folder as FolderIcon, Inbox, Plus, Trash2, AlertCircle, Check } from 'lucide-react';
 import { useBoardStore } from '../../store/useBoardStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useState } from 'react';
@@ -9,7 +9,18 @@ interface SidebarProps {
 }
 
 export const Sidebar = ({ currentView, setCurrentView }: SidebarProps) => {
-  const { folders, notebooks, createFolder, deleteFolder, isDarkMode } = useBoardStore();
+  const { 
+    folders, 
+    notebooks, 
+    createFolder, 
+    deleteFolder, 
+    isDarkMode,
+    isSyncing,
+    syncProgress,
+    syncStatusText,
+    unsyncedNotebookIds,
+    triggerSyncOrShowModal
+  } = useBoardStore();
   const { user } = useAuthStore();
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
@@ -125,54 +136,84 @@ export const Sidebar = ({ currentView, setCurrentView }: SidebarProps) => {
       </div>
 
       {/* Cloud Sync Status in Sidebar */}
-      <div className={`mt-auto mb-4 p-3 rounded-xl border ${
-        isDarkMode ? 'bg-[#1a1c29]/90 border-white/5' : 'bg-white border-gray-200 shadow-sm'
-      }`}>
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Cloud Sync</span>
-          <span className={`w-2 h-2 rounded-full ${useBoardStore.getState().isSyncing ? 'bg-teal-400 animate-spin' : 'bg-emerald-400 animate-pulse'}`} />
-        </div>
-        <p className="text-[11px] opacity-60 mb-2.5 leading-relaxed">
-          {useBoardStore.getState().isSyncing
-            ? useBoardStore.getState().syncStatusText || `Syncing ${useBoardStore.getState().syncProgress}%...`
-            : user?.id && !user.is_anonymous
-            ? 'All notebooks synchronized across devices.'
-            : 'Using local storage. Sign in to sync.'}
-        </p>
+      {(() => {
+        const currentNotebookIds = new Set(notebooks.map((n) => n.id));
+        const activeUnsyncedCount = unsyncedNotebookIds.filter((id) => currentNotebookIds.has(id)).length;
+        const isAuth = Boolean(user?.id && !user.is_anonymous);
+        const isAllSynced = isAuth && activeUnsyncedCount === 0;
 
-        {useBoardStore.getState().isSyncing && (
-          <div className="w-full bg-gray-700/40 rounded-full h-1.5 mb-2.5 overflow-hidden">
-            <div 
-              className="bg-teal-400 h-full rounded-full transition-all duration-200" 
-              style={{ width: `${Math.max(5, useBoardStore.getState().syncProgress)}%` }} 
-            />
+        return (
+          <div className={`mt-auto mb-4 p-3 rounded-xl border ${
+            isDarkMode ? 'bg-[#1a1c29]/90 border-white/5' : 'bg-white border-gray-200 shadow-sm'
+          }`}>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Cloud Sync</span>
+              <span className={`w-2 h-2 rounded-full ${
+                isSyncing 
+                  ? 'bg-teal-400 animate-spin' 
+                  : isAllSynced 
+                  ? 'bg-emerald-400 animate-pulse' 
+                  : isAuth 
+                  ? 'bg-amber-400 animate-pulse' 
+                  : 'bg-gray-400'
+              }`} />
+            </div>
+            <p className="text-[11px] opacity-60 mb-2.5 leading-relaxed">
+              {isSyncing
+                ? syncStatusText || `Syncing ${syncProgress}%...`
+                : isAuth
+                ? isAllSynced
+                  ? `All ${notebooks.length} notebooks are backed up and synced.`
+                  : `${activeUnsyncedCount} notebook${activeUnsyncedCount > 1 ? 's' : ''} not synced yet.`
+                : 'Using local storage. Sign in to sync.'}
+            </p>
+
+            {isSyncing && (
+              <div className="w-full bg-gray-700/40 rounded-full h-1.5 mb-2.5 overflow-hidden">
+                <div 
+                  className="bg-teal-400 h-full rounded-full transition-all duration-200" 
+                  style={{ width: `${Math.max(5, syncProgress)}%` }} 
+                />
+              </div>
+            )}
+
+            <button
+              disabled={isSyncing}
+              onClick={() => {
+                if (isAuth && user?.id) {
+                  triggerSyncOrShowModal(user.id);
+                } else {
+                  useAuthStore.getState().setShowAuthModal(true);
+                }
+              }}
+              className={`w-full py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer ${
+                isSyncing
+                  ? 'bg-teal-600/50 text-teal-200 cursor-not-allowed'
+                  : isAuth
+                  ? isAllSynced
+                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                    : 'bg-amber-600 hover:bg-amber-500 text-white'
+                  : 'bg-amber-600 hover:bg-amber-500 text-white'
+              }`}
+            >
+              {isSyncing ? (
+                `${syncProgress}% Syncing...`
+              ) : isAuth ? (
+                isAllSynced ? (
+                  <>
+                    <Check size={13} />
+                    <span>All Synced</span>
+                  </>
+                ) : (
+                  <span>Sync Now ({activeUnsyncedCount} Unsynced)</span>
+                )
+              ) : (
+                'Sign in to Sync'
+              )}
+            </button>
           </div>
-        )}
-
-        <button
-          disabled={useBoardStore.getState().isSyncing}
-          onClick={() => {
-            if (user?.id && !user.is_anonymous) {
-              useBoardStore.getState().syncAllNotebooks(user.id);
-            } else {
-              useAuthStore.getState().setShowAuthModal(true);
-            }
-          }}
-          className={`w-full py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm ${
-            useBoardStore.getState().isSyncing
-              ? 'bg-teal-600/50 text-teal-200 cursor-not-allowed'
-              : user?.id && !user.is_anonymous
-              ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
-              : 'bg-amber-600 hover:bg-amber-500 text-white'
-          }`}
-        >
-          {useBoardStore.getState().isSyncing 
-            ? `${useBoardStore.getState().syncProgress}% Syncing...`
-            : user?.id && !user.is_anonymous 
-            ? 'Sync Library Now' 
-            : 'Sign in to Sync'}
-        </button>
-      </div>
+        );
+      })()}
 
 
       {/* Delete Folder Confirmation Dialog */}

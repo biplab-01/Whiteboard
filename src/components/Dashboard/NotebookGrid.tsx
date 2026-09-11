@@ -1,6 +1,6 @@
 import { useBoardStore } from '../../store/useBoardStore';
 import { NotebookCard } from './NotebookCard';
-import { Plus, FileUp, Cloud, RefreshCw, Check, CloudOff } from 'lucide-react';
+import { Plus, FileUp, RefreshCw, Check, CloudOff, CloudUpload } from 'lucide-react';
 import { useAuthStore } from '../../store/useAuthStore';
 
 interface NotebookGridProps {
@@ -10,10 +10,26 @@ interface NotebookGridProps {
 }
 
 export const NotebookGrid = ({ currentView, searchQuery, onOpenImportModal }: NotebookGridProps) => {
-  const { notebooks, folders, createNotebook, isDarkMode, openNotebook, isSyncing, syncStatusText, syncProgress, syncAllNotebooks } = useBoardStore();
+  const { 
+    notebooks, 
+    folders, 
+    createNotebook, 
+    isDarkMode, 
+    openNotebook, 
+    isSyncing, 
+    syncStatusText, 
+    syncProgress, 
+    unsyncedNotebookIds,
+    triggerSyncOrShowModal 
+  } = useBoardStore();
   const { user, setShowAuthModal } = useAuthStore();
 
   const isAuth = user?.id && !user.is_anonymous;
+
+  // Calculate active unsynced count for notebooks currently in library
+  const currentNotebookIds = new Set(notebooks.map((n) => n.id));
+  const activeUnsyncedCount = unsyncedNotebookIds.filter((id) => currentNotebookIds.has(id)).length;
+  const isAllSynced = isAuth && activeUnsyncedCount === 0;
 
   let filteredNotebooks = notebooks;
   let viewTitle = 'All notebooks';
@@ -55,7 +71,7 @@ export const NotebookGrid = ({ currentView, searchQuery, onOpenImportModal }: No
             disabled={isSyncing}
             onClick={() => {
               if (isAuth && user?.id) {
-                syncAllNotebooks(user.id);
+                triggerSyncOrShowModal(user.id);
               } else {
                 setShowAuthModal(true);
               }
@@ -66,14 +82,24 @@ export const NotebookGrid = ({ currentView, searchQuery, onOpenImportModal }: No
                 : syncStatusText
                 ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
                 : isAuth
-                ? isDarkMode
-                  ? 'border-indigo-500/40 bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 hover:border-indigo-500/60'
-                  : 'border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300'
+                ? isAllSynced
+                  ? isDarkMode
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 hover:border-emerald-500/60'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:border-emerald-300'
+                  : isDarkMode
+                  ? 'border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 hover:border-amber-500/60'
+                  : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 hover:border-amber-300'
                 : isDarkMode
                 ? 'border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 hover:border-amber-500/60'
                 : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 hover:border-amber-300'
             }`}
-            title={isAuth ? 'Fetch and synchronize all notebooks and drawings from Supabase' : 'Sign in to enable multi-device sync'}
+            title={
+              isAuth
+                ? isAllSynced
+                  ? `All ${notebooks.length} notebooks are backed up and synced to the cloud. Click to sync.`
+                  : `${activeUnsyncedCount} notebook${activeUnsyncedCount > 1 ? 's' : ''} have unsynced changes. Click to back up to cloud.`
+                : 'Sign in to enable multi-device sync'
+            }
           >
             {isSyncing && (
               <div 
@@ -93,10 +119,17 @@ export const NotebookGrid = ({ currentView, searchQuery, onOpenImportModal }: No
                   <span>{syncStatusText}</span>
                 </>
               ) : isAuth ? (
-                <>
-                  <Cloud size={14} className="text-indigo-400" />
-                  <span>Sync All Notebooks</span>
-                </>
+                isAllSynced ? (
+                  <>
+                    <Check size={14} className="text-emerald-400" />
+                    <span>All Synced</span>
+                  </>
+                ) : (
+                  <>
+                    <CloudUpload size={14} className="text-amber-400" />
+                    <span>Sync Now ({activeUnsyncedCount} Not Synced)</span>
+                  </>
+                )
               ) : (
                 <>
                   <CloudOff size={14} className="text-amber-400" />
