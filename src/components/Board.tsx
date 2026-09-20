@@ -35,6 +35,12 @@ fabric.FabricObject.prototype.perPixelTargetFind = true;
 fabric.Textbox.prototype.lockScalingFlip = true;
 fabric.IText.prototype.lockScalingFlip = true;
 
+// CRITICAL FOR MS WORD-LIKE TEXT: Textbox & IText must NEVER use perPixelTargetFind!
+// Transparent space between words, character spacing, line padding, and empty lines must remain clickable
+// so cursor positioning, selecting text, and typing work flawlessly without deselecting or losing cursor.
+fabric.Textbox.prototype.perPixelTargetFind = false;
+fabric.IText.prototype.perPixelTargetFind = false;
+
 // Legacy Unicode reverse mappings for backward-compatibility cleanup
 const REVERSE_SUPER_MAP: Record<string, string> = {
   '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4',
@@ -56,7 +62,7 @@ const REVERSE_SUB_MAP: Record<string, string> = {
   '₅': '5', '₆': '6', '₇': '7', '₈': '8', '₉': '9',
   '₊': '+', '₋': '-', '₌': '=', '₍': '(', '₎': ')',
   'ₐ': 'a', 'ₑ': 'e', 'ₕ': 'h', 'ᵢ': 'i', 'ⱼ': 'j',
-  'ₖ': 'k', 'ₗ': 'l', 'ₘ': 'm', 'ₙ': 'n', 'ₒ': 'o',
+  'ₖ': 'k', 'ₗ': 'l', 'ᵐ': 'm', 'ₙ': 'n', 'ₒ': 'o',
   'ₚ': 'p', 'ᵣ': 'r', 'ₛ': 's', 'ₜ': 't', 'ᵤ': 'u',
   'ᵥ': 'v', 'ₓ': 'x',
 };
@@ -124,8 +130,9 @@ if (fabric.Textbox && fabric.Textbox.prototype) {
   // Custom _wrapLine: Ensures words wrap strictly to the textbox boundary (desiredWidth).
   // Native Fabric uses Math.max(desiredWidth, largestWordWidth, dynamicMinWidth), which inflates
   // the wrapping width for ALL lines whenever any word in the text is wide.
-  // When sliding/resizing the box narrower, this caused normal words to get sliced by the sideline!
   // By wrapping strictly to desiredWidth, any word that reaches the sideline drops to the next line!
+  // Crucially: Empty lines (e.g. from pressing Enter) MUST produce [[]] so Fabric's line index
+  // includes the newline, allowing the cursor to seamlessly move down to the next line like MS Word!
   (fabric.Textbox.prototype as any)._wrapLine = function(
     lineIndex: number,
     desiredWidth: number,
@@ -205,7 +212,10 @@ if (fabric.Textbox && fabric.Textbox.prototype) {
       offset++;
       lineJustStarted = false;
     }
-    if (i && line.length > 0) {
+
+    // Push the current line or empty line.
+    // If line has content OR if graphemeLines is empty (empty line on Enter), push so [[]] is returned!
+    if (line.length > 0 || graphemeLines.length === 0) {
       graphemeLines.push(line);
     }
 
@@ -224,6 +234,7 @@ const normalizeTextObject = (obj: fabric.FabricObject) => {
       mb: false,
     });
     textObj.lockScalingFlip = true;
+    textObj.perPixelTargetFind = false;
     textObj.splitByGrapheme = false; // Always wrap full words, not individual characters
     if (typeof textObj.padding !== 'number' || textObj.padding < 6) {
       textObj.padding = 6;
@@ -640,6 +651,18 @@ export const Board: React.FC = () => {
     if (json && Array.isArray(json.objects)) {
       json.objects = json.objects.filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
     }
+    const store = useBoardStore.getState();
+    const currentPage = store.pages.find((p) => p.id === store.currentPageId);
+    const existingBg = extractBgSettingsFromPage(currentPage);
+    json.backgroundSettings = {
+      bgType: store.bgType || existingBg.bgType,
+      bgColor: store.bgColor || existingBg.bgColor,
+      isRuled: store.isRuled !== undefined ? store.isRuled : existingBg.isRuled,
+      ruleColor: store.ruleColor || existingBg.ruleColor,
+      pageSize: store.pageSize || existingBg.pageSize,
+      pageOrientation: store.pageOrientation || existingBg.pageOrientation,
+    };
+    json._clientId = (store as any).CLIENT_SESSION_ID || 'client-session';
     return JSON.stringify(json);
   }, []);
 
@@ -724,8 +747,11 @@ export const Board: React.FC = () => {
       canvas.forEachObject((obj) => {
         if ((obj as any).name !== 'a4-background' && (obj as any).name !== 'a4-ruled-line') {
           obj.selectable = isSelect;
-          obj.evented = true;
+          obj.evented = isSelect;
           obj.strokeUniform = true;
+          if (obj.type === 'textbox' || obj.type === 'i-text') {
+            normalizeTextObject(obj);
+          }
         }
       });
 
@@ -772,8 +798,11 @@ export const Board: React.FC = () => {
       canvas.forEachObject((obj) => {
         if ((obj as any).name !== 'a4-background' && (obj as any).name !== 'a4-ruled-line') {
           obj.selectable = isSelect;
-          obj.evented = true;
+          obj.evented = isSelect;
           obj.strokeUniform = true;
+          if (obj.type === 'textbox' || obj.type === 'i-text') {
+            normalizeTextObject(obj);
+          }
         }
       });
 
@@ -810,21 +839,12 @@ export const Board: React.FC = () => {
     (canvas as any).findTarget = function(e: MouseEvent | fabric.TPointerEvent) {
       const active = canvas.getActiveObject();
       if (active && (active as any).name !== 'a4-background' && (active as any).name !== 'a4-ruled-line') {
+        // When editing text inside a textbox, let Fabric handle sub-target finding and cursor placement natively
+        if ((active as any).isEditing) {
+          return originalFindTarget(e);
+        }
         const scenePoint = canvas.getScenePoint(e);
-        let isInside = false;
-        if (typeof active.containsPoint === 'function') {
-          isInside = active.containsPoint(scenePoint);
-        }
-        if (!isInside) {
-          const b = active.getBoundingRect();
-          isInside = (
-            scenePoint.x >= b.left &&
-            scenePoint.x <= b.left + b.width &&
-            scenePoint.y >= b.top &&
-            scenePoint.y <= b.top + b.height
-          );
-        }
-        if (isInside) {
+        if (typeof active.containsPoint === 'function' && active.containsPoint(scenePoint)) {
           return active;
         }
       }
@@ -832,6 +852,7 @@ export const Board: React.FC = () => {
     };
 
     fabricRef.current = canvas;
+    (window as any)._activeFabricCanvas = canvas;
 
     // Handle Resize
     const handleResize = () => {
@@ -952,6 +973,7 @@ export const Board: React.FC = () => {
     canvas.on('selection:created', handleSelectionUpdate);
     canvas.on('selection:updated', handleSelectionUpdate);
     canvas.on('selection:cleared', () => {
+      (window as any).__isWhiteboardEditingText = false;
       useBoardStore.getState().setActiveTextFormat(null);
       useBoardStore.getState().setActiveShapeFormat(null);
     });
@@ -960,6 +982,7 @@ export const Board: React.FC = () => {
 
     // If existing text has placeholder, select all so typing overwrites it
     canvas.on('text:editing:entered', (e: any) => {
+      (window as any).__isWhiteboardEditingText = true;
       const target = e.target as fabric.IText;
       if (target && (target.text === 'Click to edit' || target.text === 'Type text here')) {
         target.selectAll();
@@ -968,6 +991,7 @@ export const Board: React.FC = () => {
 
     // Clean up empty text boxes if left blank on blur
     canvas.on('text:editing:exited', (e: any) => {
+      (window as any).__isWhiteboardEditingText = false;
       const target = e.target as fabric.Textbox;
       if (target && typeof target.text === 'string' && target.text.trim() === '') {
         canvas.remove(target);
@@ -1293,6 +1317,7 @@ export const Board: React.FC = () => {
       window.removeEventListener('duplicate-object', duplicateObjectHandler);
       window.removeEventListener('delete-object', deleteObjectHandler);
       window.removeEventListener('zoom-action', zoomActionHandler);
+      (window as any)._activeFabricCanvas = null;
       canvas.dispose();
       fabricRef.current = null;
     };
@@ -1890,7 +1915,7 @@ export const Board: React.FC = () => {
           canvas.forEachObject((obj) => {
             if ((obj as any).name !== 'a4-background' && (obj as any).name !== 'a4-ruled-line') {
               obj.selectable = isSelect;
-              obj.evented = true;
+              obj.evented = isSelect;
               obj.strokeUniform = true;
 
               if (obj.type === 'textbox' || obj.type === 'i-text') {
@@ -1953,7 +1978,7 @@ export const Board: React.FC = () => {
           canvas.forEachObject((obj) => {
             if ((obj as any).name !== 'a4-background' && (obj as any).name !== 'a4-ruled-line') {
               obj.selectable = isSelect;
-              obj.evented = true;
+              obj.evented = isSelect;
               obj.strokeUniform = true;
               if (obj.type === 'textbox' || obj.type === 'i-text') {
                 normalizeTextObject(obj);
@@ -2133,6 +2158,11 @@ export const Board: React.FC = () => {
 
       canvas.on('mouse:down', (opt) => {
         const active = canvas.getActiveObject();
+        // If actively editing text in a Textbox, let Fabric handle cursor placement and selection natively
+        if (active && (active as any).isEditing) {
+          return;
+        }
+
         const scenePoint = canvas.getScenePoint(opt.e);
 
         // If an object is already selected and user clicks inside its boundary/handles, keep active for easy dragging
@@ -2140,24 +2170,7 @@ export const Board: React.FC = () => {
           if ((active as any).__corner) {
             return;
           }
-
-          let isInsideActive = false;
           if (typeof active.containsPoint === 'function' && active.containsPoint(scenePoint)) {
-            isInsideActive = true;
-          }
-          if (!isInsideActive) {
-            const b = active.getBoundingRect();
-            if (
-              scenePoint.x >= b.left &&
-              scenePoint.x <= b.left + b.width &&
-              scenePoint.y >= b.top &&
-              scenePoint.y <= b.top + b.height
-            ) {
-              isInsideActive = true;
-            }
-          }
-
-          if (isInsideActive) {
             return;
           }
         }
@@ -2192,6 +2205,7 @@ export const Board: React.FC = () => {
       canvas.forEachObject((obj) => {
         if ((obj as any).name !== 'a4-background' && (obj as any).name !== 'a4-ruled-line') {
           obj.selectable = false;
+          obj.evented = false;
         }
       });
       canvas.requestRenderAll();
@@ -2347,6 +2361,18 @@ export const Board: React.FC = () => {
         };
 
         if (currentTool === 'text') {
+          // If clicked on an existing Textbox or IText, enter editing on that existing text directly without creating an overlay duplicate!
+          const objects = [...canvas.getObjects()].reverse();
+          for (const obj of objects) {
+            if ((obj.type === 'textbox' || obj.type === 'i-text') && obj.containsPoint(scenePoint)) {
+              canvas.setActiveObject(obj);
+              (obj as fabric.Textbox).enterEditing();
+              canvas.requestRenderAll();
+              setCurrentTool('select');
+              return;
+            }
+          }
+
           const { lastTextSize, lastFontFamily, lastTextColor } = useBoardStore.getState();
           const defaultSize = lastTextSize || 24;
           const defaultFont = lastFontFamily || 'Inter';
@@ -2372,6 +2398,7 @@ export const Board: React.FC = () => {
             splitByGrapheme: false, // Wrap by whole words on spaces
             cursorColor: textColor,
             editable: true,
+            perPixelTargetFind: false,
             lockUniScaling: true,
             lockScalingFlip: true,
           });

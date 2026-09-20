@@ -32,9 +32,25 @@ function App() {
   }, [initialize]);
 
   useEffect(() => {
+    let previousToolBeforePan: string | null = null;
+
+    const isFabricEditing = () => {
+      if ((window as any).__isWhiteboardEditingText) return true;
+      const canvas = (window as any)._activeFabricCanvas;
+      const active = canvas?.getActiveObject();
+      if (active && (active as any).isEditing) return true;
+      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return true;
+      return false;
+    };
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if typing in an input or contenteditable
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || (e.target as HTMLElement).isContentEditable) {
+      // Ignore if typing in an input, textarea, contenteditable, or actively typing inside Fabric textbox
+      if (
+        e.target instanceof HTMLInputElement || 
+        e.target instanceof HTMLTextAreaElement || 
+        (e.target as HTMLElement).isContentEditable ||
+        isFabricEditing()
+      ) {
         return;
       }
       
@@ -43,6 +59,16 @@ function App() {
       
       // Ctrl/Meta shortcuts (Undo, Redo, Copy, Paste, etc.) are handled inside Board.tsx
       if (!isCtrlOrMeta) {
+        if (e.key === ' ') {
+          e.preventDefault();
+          const current = useBoardStore.getState().currentTool;
+          if (current !== 'pan') {
+            previousToolBeforePan = current;
+            setCurrentTool('pan');
+          }
+          return;
+        }
+
         switch (key) {
           case 'v': setCurrentTool('select'); break;
           case 'p': setCurrentTool('pen'); break;
@@ -52,15 +78,26 @@ function App() {
           case 'c': setCurrentTool('circle'); break;
           case 'l': setCurrentTool('line'); break;
           case 't': setCurrentTool('text'); break;
-          case ' ': setCurrentTool('pan'); e.preventDefault(); break; // prevent scroll
         }
       }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || (e.target as HTMLElement).isContentEditable) return;
+      if (
+        e.target instanceof HTMLInputElement || 
+        e.target instanceof HTMLTextAreaElement || 
+        (e.target as HTMLElement).isContentEditable ||
+        isFabricEditing()
+      ) {
+        return;
+      }
       if (e.key === ' ') {
-        setCurrentTool('select');
+        if (previousToolBeforePan) {
+          setCurrentTool(previousToolBeforePan as any);
+          previousToolBeforePan = null;
+        } else {
+          setCurrentTool('select');
+        }
       }
     };
 

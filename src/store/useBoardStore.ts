@@ -72,14 +72,16 @@ export interface BgSettings {
 }
 
 
-export const DEFAULT_BG_SETTINGS: BgSettings = {
+export const getDefaultBgSettings = (isDark: boolean = true): BgSettings => ({
   bgType: 'solid',
-  bgColor: '#ffffff',
+  bgColor: isDark ? '#1a1c29' : '#ffffff',
   isRuled: false,
-  ruleColor: '#e5e7eb',
+  ruleColor: isDark ? '#374151' : '#e5e7eb',
   pageSize: 'a4',
   pageOrientation: 'portrait',
-};
+});
+
+export const DEFAULT_BG_SETTINGS: BgSettings = getDefaultBgSettings(true);
 
 // UUID generation utility (RFC 4122 v4)
 export const generateUUID = (): string => {
@@ -112,31 +114,36 @@ export const STORAGE_KEYS = {
 };
 
 // Extract background and document dimensions from a PageRow object or canvas_data
-export const extractBgSettingsFromPage = (page?: PageRow | null): BgSettings => {
-  if (!page || !page.canvas_data) return { ...DEFAULT_BG_SETTINGS };
+export const extractBgSettingsFromPage = (page?: PageRow | null, isDarkFallback?: boolean): BgSettings => {
+  const isDark = isDarkFallback !== undefined 
+    ? isDarkFallback 
+    : (typeof useBoardStore !== 'undefined' ? (useBoardStore.getState?.()?.isDarkMode ?? true) : true);
+  const fallback = getDefaultBgSettings(isDark);
+
+  if (!page || !page.canvas_data) return { ...fallback };
 
   let data = page.canvas_data;
   if (typeof data === 'string') {
     try {
       data = JSON.parse(data);
     } catch {
-      return { ...DEFAULT_BG_SETTINGS };
+      return { ...fallback };
     }
   }
 
   if (data && typeof data === 'object' && 'backgroundSettings' in data && data.backgroundSettings) {
     const bs = data.backgroundSettings as any;
     return {
-      bgType: bs.bgType || DEFAULT_BG_SETTINGS.bgType,
-      bgColor: bs.bgColor || DEFAULT_BG_SETTINGS.bgColor,
-      isRuled: typeof bs.isRuled === 'boolean' ? bs.isRuled : DEFAULT_BG_SETTINGS.isRuled,
-      ruleColor: bs.ruleColor || DEFAULT_BG_SETTINGS.ruleColor,
-      pageSize: bs.pageSize || DEFAULT_BG_SETTINGS.pageSize,
-      pageOrientation: bs.pageOrientation || DEFAULT_BG_SETTINGS.pageOrientation,
+      bgType: bs.bgType || fallback.bgType,
+      bgColor: bs.bgColor || fallback.bgColor,
+      isRuled: typeof bs.isRuled === 'boolean' ? bs.isRuled : fallback.isRuled,
+      ruleColor: bs.ruleColor || fallback.ruleColor,
+      pageSize: bs.pageSize || fallback.pageSize,
+      pageOrientation: bs.pageOrientation || fallback.pageOrientation,
     };
   }
 
-  return { ...DEFAULT_BG_SETTINGS };
+  return { ...fallback };
 };
 
 export const getPageBackgroundSettings = (pageId?: string | null): BgSettings => {
@@ -729,7 +736,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
     // Prepare default Page 1
     const defaultPageId = generateUUID();
-    const defaultBg = { ...DEFAULT_BG_SETTINGS };
+    const defaultBg = getDefaultBgSettings(get().isDarkMode);
     const defaultPage: PageRow = {
       id: defaultPageId,
       notebook_id: notebookId,
