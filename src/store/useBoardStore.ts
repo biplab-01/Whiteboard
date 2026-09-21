@@ -179,7 +179,7 @@ export interface BoardState {
   deleteNotebook: (id: string) => Promise<void>;
   moveNotebook: (notebookId: string, folderId: string | null) => Promise<void>;
   openNotebook: (id: string) => Promise<void>;
-  closeNotebook: () => void;
+  closeNotebook: () => Promise<void>;
 
   // Realtime Cloud Handlers
   handleRealtimeFolderChange: (payload: any) => void;
@@ -192,7 +192,7 @@ export interface BoardState {
   addPage: (userId: string) => Promise<void>;
   removePage: (id: string) => Promise<void>;
   switchPage: (id: string) => Promise<void>;
-  updatePageData: (id: string, canvasData: string | any, explicitBg?: Partial<BgSettings>) => Promise<void>;
+  updatePageData: (id: string, canvasData: string | any, explicitBg?: Partial<BgSettings>, immediate?: boolean) => Promise<void>;
   importPdfPages: (pdfPages: { canvasData: string; name: string }[], afterPageId: string | null, userId: string) => Promise<void>;
 
 
@@ -258,8 +258,66 @@ export interface BoardState {
   setToolbarAutoHide: (autoHide: boolean) => void;
 }
 
-// Debounced page save timer dictionary
+// Debounced page save timer dictionary & pending save tracker
 const pageSaveTimers: Record<string, any> = {};
+
+interface PendingSaveItem {
+  id: string;
+  canvasData: any;
+  updatedAt: string;
+  activeUserId: string | null;
+  targetNbId: string | null;
+}
+const pendingPageSaves = new Map<string, PendingSaveItem>();
+
+/**
+ * Flushes all pending in-flight page saves immediately to IndexedDB.
+ * Guarantees that closing a notebook or exiting the app never loses unsaved canvas data or imported photos.
+ */
+export const flushPendingPageSaves = async (): Promise<void> => {
+  // Cancel active timers since we are flushing now
+  Object.keys(pageSaveTimers).forEach((key) => {
+    clearTimeout(pageSaveTimers[key]);
+    delete pageSaveTimers[key];
+  });
+
+  if (pendingPageSaves.size === 0) return;
+
+  const entries = Array.from(pendingPageSaves.values());
+  pendingPageSaves.clear();
+
+  const currentUserId = useBoardStore.getState().activeUserId || localStorage.getItem('nova_guest_id') || 'guest';
+  const pagesKey = getUserStorageKey(currentUserId, STORAGE_KEYS.PAGES);
+  const unsyncedKey = getUserStorageKey(currentUserId, STORAGE_KEYS.UNSYNCED_NOTEBOOKS);
+
+  try {
+    const allPages = (await getIdbItem<PageRow[]>(pagesKey, [])) || [];
+    let updatedAllPages = [...allPages];
+    let updatedUnsynced = [...useBoardStore.getState().unsyncedNotebookIds];
+
+    for (const item of entries) {
+      const idx = updatedAllPages.findIndex((p) => p.id === item.id);
+      if (idx >= 0) {
+        updatedAllPages[idx] = { ...updatedAllPages[idx], canvas_data: item.canvasData, updated_at: item.updatedAt };
+      } else {
+        const liveP = useBoardStore.getState().pages.find((p) => p.id === item.id);
+        if (liveP) {
+          updatedAllPages.push({ ...liveP, canvas_data: item.canvasData, updated_at: item.updatedAt });
+        }
+      }
+      if (item.targetNbId && !updatedUnsynced.includes(item.targetNbId)) {
+        updatedUnsynced.push(item.targetNbId);
+      }
+    }
+
+    await Promise.all([
+      setIdbItem(pagesKey, updatedAllPages),
+      setIdbItem(unsyncedKey, updatedUnsynced),
+    ]);
+  } catch (e) {
+    console.warn('Error during flushPendingPageSaves:', e);
+  }
+};
 
 // Background sync hydration at boot
 if (typeof window !== 'undefined') {
@@ -1021,12 +1079,9 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     }
   },
 
-  closeNotebook: () => {
-    // Clear any pending debounced timers
-    Object.keys(pageSaveTimers).forEach((key) => {
-      clearTimeout(pageSaveTimers[key]);
-      delete pageSaveTimers[key];
-    });
+  closeNotebook: async () => {
+    // Flush all pending debounced page saves immediately so nothing is ever lost
+    await flushPendingPageSaves();
     set({ activeNotebookId: null, pages: [], currentPageId: null, loading: false });
   },
 
@@ -1241,7 +1296,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     });
   },
 
-  updatePageData: async (id: string, canvasData: string | any, explicitBg?: Partial<BgSettings>) => {
+  updatePageData: async (id: string, canvasData: string | any, explicitBg?: Partial<BgSettings>, immediate?: boolean) => {
     const { bgType, bgColor, isRuled, ruleColor, pageSize, pageOrientation, activeUserId, pages, currentPageId } = get();
     
     // Determine background settings: if explicitBg given, apply it; otherwise if current active page, use active store settings; otherwise retain page's own settings!
@@ -1286,12 +1341,22 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
     set({ pages: updatedPages, unsyncedNotebookIds: updatedUnsynced });
 
-    // Debounce IndexedDB persistent storage write so page transitions are lightning fast
+    // Track in pendingPageSaves map so flushPendingPageSaves will always persist this if closed immediately
+    pendingPageSaves.set(id, {
+      id,
+      canvasData: formattedData,
+      updatedAt: now,
+      activeUserId,
+      targetNbId,
+    });
+
     if (pageSaveTimers[id]) {
       clearTimeout(pageSaveTimers[id]);
-    }
-    pageSaveTimers[id] = setTimeout(async () => {
       delete pageSaveTimers[id];
+    }
+
+    const performSave = async () => {
+      pendingPageSaves.delete(id);
       try {
         const pagesKey = getUserStorageKey(activeUserId, STORAGE_KEYS.PAGES);
         const unsyncedKey = getUserStorageKey(activeUserId, STORAGE_KEYS.UNSYNCED_NOTEBOOKS);
@@ -1308,7 +1373,13 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       } catch (e) {
         console.warn('Background page save error:', e);
       }
-    }, 150);
+    };
+
+    if (immediate) {
+      await performSave();
+    } else {
+      pageSaveTimers[id] = setTimeout(performSave, 150);
+    }
   },
 
   importPdfPages: async (pdfPages: { canvasData: string; name: string }[], afterPageId: string | null, userId: string) => {

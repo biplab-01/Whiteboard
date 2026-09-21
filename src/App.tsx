@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useAuthStore } from './store/useAuthStore';
-import { useBoardStore } from './store/useBoardStore';
+import { useBoardStore, flushPendingPageSaves } from './store/useBoardStore';
 import { Auth } from './components/Auth';
 import { Dashboard } from './components/Dashboard/Dashboard';
 import { Board } from './components/Board';
@@ -30,6 +30,15 @@ function App() {
   useEffect(() => {
     initialize();
   }, [initialize]);
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      window.dispatchEvent(new CustomEvent('save-canvas-state'));
+      flushPendingPageSaves();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
 
   useEffect(() => {
     let previousToolBeforePan: string | null = null;
@@ -147,11 +156,9 @@ function App() {
         {/* Column 1: Library (Top) & Export (Beneath) */}
         <div className="flex flex-col gap-2">
           <button 
-            onClick={() => {
+            onClick={async () => {
               window.dispatchEvent(new CustomEvent('save-canvas-state'));
-              setTimeout(() => {
-                closeNotebook();
-              }, 30);
+              await closeNotebook();
             }}
             className={`px-3.5 py-2 rounded-xl shadow-md border backdrop-blur-md transition-all flex items-center gap-2 text-sm font-medium h-[38px] ${
               isDarkMode ? 'bg-gray-800/80 border-gray-700 text-gray-200 hover:bg-gray-700' : 'bg-white/80 border-gray-200 text-gray-700 hover:bg-gray-50'

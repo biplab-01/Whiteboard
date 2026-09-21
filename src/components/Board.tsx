@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import * as fabric from 'fabric';
 import { useBoardStore, getPageDimensions, extractBgSettingsFromPage, CLIENT_SESSION_ID } from '../store/useBoardStore';
+import { fileToDataUrl, isImageFile, isPdfFile, sanitizeCanvasJsonForLoading } from '../utils/mediaUtils';
 import { useShallow } from 'zustand/react/shallow';
 import * as pdfjsLib from 'pdfjs-dist';
 // For Vite we can import the worker as a URL
@@ -828,9 +829,40 @@ export const Board: React.FC = () => {
   }, [pageSize, pageOrientation, isDarkMode, bgColor, bgType, isRuled, ruleColor]);
 
   const getCanvasSnapshot = useCallback((canvas: fabric.Canvas): string => {
-    const json = (canvas as any).toJSON(['name', 'excludeFromExport']);
+    const json = (canvas as any).toJSON(['name', 'excludeFromExport', 'src']);
     if (json && Array.isArray(json.objects)) {
       json.objects = json.objects.filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
+
+      // Guarantee all images have persistent data URLs and no dead blob URLs leak into storage
+      const canvasObjects = canvas.getObjects();
+      json.objects.forEach((obj: any) => {
+        if ((obj.type || '').toLowerCase() === 'image') {
+          if (!obj.src || obj.src.startsWith('blob:')) {
+            const liveImg = canvasObjects.find((o: any) =>
+              (o.type || '').toLowerCase() === 'image' && (o === obj || (Math.abs(o.left - obj.left) < 2 && Math.abs(o.top - obj.top) < 2))
+            ) as any;
+            if (liveImg) {
+              const el = liveImg._element || liveImg._originalElement;
+              if (el && (el.naturalWidth || el.width)) {
+                try {
+                  const off = document.createElement('canvas');
+                  off.width = el.naturalWidth || el.width;
+                  off.height = el.naturalHeight || el.height;
+                  const ctx = off.getContext('2d');
+                  if (ctx) {
+                    ctx.drawImage(el, 0, 0);
+                    const converted = off.toDataURL('image/png');
+                    obj.src = converted;
+                    liveImg.src = converted;
+                  }
+                } catch (e) {
+                  console.warn('Snapshot live image conversion fallback error:', e);
+                }
+              }
+            }
+          }
+        }
+      });
     }
     const store = useBoardStore.getState();
     const currentPage = store.pages.find((p) => p.id === store.currentPageId);
@@ -847,13 +879,13 @@ export const Board: React.FC = () => {
     return JSON.stringify(json);
   }, []);
 
-  const saveState = useCallback((snapshot?: string) => {
+  const saveState = useCallback((snapshot?: string, immediate?: boolean) => {
     const targetPageId = activePageIdRef.current || useBoardStore.getState().currentPageId;
     const { updatePageData: liveUpdate } = useBoardStore.getState();
     const canvas = fabricRef.current;
     if (canvas && targetPageId) {
       const data = snapshot ?? getCanvasSnapshot(canvas);
-      liveUpdate(targetPageId, data);
+      liveUpdate(targetPageId, data, undefined, immediate);
     }
   }, [getCanvasSnapshot]);
 
@@ -920,8 +952,8 @@ export const Board: React.FC = () => {
       canvas.discardActiveObject();
 
       const parsed = JSON.parse(prevState);
-
-      await canvas.loadFromJSON(parsed);
+      const sanitized = await sanitizeCanvasJsonForLoading(parsed);
+      await canvas.loadFromJSON(sanitized);
 
       const liveTool = useBoardStore.getState().currentTool;
       const isSelect = liveTool === 'select';
@@ -971,8 +1003,8 @@ export const Board: React.FC = () => {
       canvas.discardActiveObject();
 
       const parsed = JSON.parse(nextState);
-
-      await canvas.loadFromJSON(parsed);
+      const sanitized = await sanitizeCanvasJsonForLoading(parsed);
+      await canvas.loadFromJSON(sanitized);
 
       const liveTool = useBoardStore.getState().currentTool;
       const isSelect = liveTool === 'select';
@@ -1938,24 +1970,34 @@ export const Board: React.FC = () => {
   useEffect(() => {
     const handleInsertMedia = async (e: Event) => {
       const customEvent = e as CustomEvent<{ url: string, type: 'image' | 'pdf', file: File }>;
-      const { url, type } = customEvent.detail;
+      const { url, type, file } = customEvent.detail;
       const canvas = fabricRef.current;
       if (!canvas) return;
 
       const { width: currentW } = getPageDimensions(pageSize, pageOrientation);
 
       if (type === 'image') {
-        const img = await fabric.FabricImage.fromURL(url);
+        let finalUrl = url;
+        if (file && (!finalUrl || finalUrl.startsWith('blob:'))) {
+          try {
+            finalUrl = await fileToDataUrl(file);
+          } catch (err) {
+            console.warn('Could not convert file to Data URL, using url:', err);
+          }
+        }
+        const img = await fabric.FabricImage.fromURL(finalUrl);
         // Scale down if it's too big
         if (img.width! > currentW - 100) {
           img.scaleToWidth(currentW - 100);
         }
         img.set({
+          name: 'imported-image',
           left: (canvas.width! - img.getScaledWidth()) / 2,
           top: (canvas.height! - img.getScaledHeight()) / 2,
           selectable: true,
           evented: true,
         });
+        (img as any).src = finalUrl;
         canvas.add(img);
         canvas.setActiveObject(img);
         canvas.requestRenderAll();
@@ -2051,6 +2093,10 @@ export const Board: React.FC = () => {
             });
           }
 
+          if (url && url.startsWith('blob:')) {
+            URL.revokeObjectURL(url);
+          }
+
           if (pdfPagesData.length > 0) {
             await useBoardStore.getState().importPdfPages(pdfPagesData, currentPid, userId);
           }
@@ -2064,9 +2110,92 @@ export const Board: React.FC = () => {
     return () => window.removeEventListener('insert-media', handleInsertMedia);
   }, [pageSize, pageOrientation, recordState, saveState, isDarkMode]);
 
+  // Native OS Clipboard Paste & Drag-and-Drop Image/PDF Import
+  useEffect(() => {
+    const handleWindowPaste = async (e: ClipboardEvent) => {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target as HTMLElement).isContentEditable
+      ) {
+        return;
+      }
+
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            try {
+              const dataUrl = await fileToDataUrl(file);
+              window.dispatchEvent(
+                new CustomEvent('insert-media', {
+                  detail: { url: dataUrl, type: 'image', file },
+                })
+              );
+            } catch (err) {
+              console.error('Error pasting image from clipboard:', err);
+            }
+            return;
+          }
+        }
+      }
+    };
+
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    };
+
+    const handleDrop = async (e: DragEvent) => {
+      e.preventDefault();
+      const files = e.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (isImageFile(file)) {
+          try {
+            const dataUrl = await fileToDataUrl(file);
+            window.dispatchEvent(
+              new CustomEvent('insert-media', {
+                detail: { url: dataUrl, type: 'image', file },
+              })
+            );
+          } catch (err) {
+            console.error('Error dropping image file:', err);
+          }
+        } else if (isPdfFile(file)) {
+          const url = URL.createObjectURL(file);
+          window.dispatchEvent(
+            new CustomEvent('insert-media', {
+              detail: { url, type: 'pdf', file },
+            })
+          );
+        }
+      }
+    };
+
+    window.addEventListener('paste', handleWindowPaste);
+    window.addEventListener('dragover', handleDragOver);
+    window.addEventListener('drop', handleDrop);
+
+    return () => {
+      window.removeEventListener('paste', handleWindowPaste);
+      window.removeEventListener('dragover', handleDragOver);
+      window.removeEventListener('drop', handleDrop);
+    };
+  }, []);
+
   useEffect(() => {
     const handleSaveRequest = () => {
-      saveState();
+      saveState(undefined, true);
     };
     window.addEventListener('save-canvas-state', handleSaveRequest);
     return () => window.removeEventListener('save-canvas-state', handleSaveRequest);
@@ -2110,12 +2239,15 @@ export const Board: React.FC = () => {
     }
 
     if (pageToLoad?.canvas_data) {
-      try {
-        const parsed = typeof pageToLoad.canvas_data === 'string'
-          ? JSON.parse(pageToLoad.canvas_data)
-          : pageToLoad.canvas_data;
+      const loadPage = async () => {
+        try {
+          const parsed = typeof pageToLoad.canvas_data === 'string'
+            ? JSON.parse(pageToLoad.canvas_data)
+            : pageToLoad.canvas_data;
 
-        canvas.loadFromJSON(parsed).then(() => {
+          const sanitized = await sanitizeCanvasJsonForLoading(parsed);
+          await canvas.loadFromJSON(sanitized);
+
           const liveTool = useBoardStore.getState().currentTool;
           const isSelect = liveTool === 'select';
 
@@ -2133,13 +2265,15 @@ export const Board: React.FC = () => {
           renderBackground(canvas);
           canvas.requestRenderAll();
           initPageHistory(currentPageId, getCanvasSnapshot(canvas));
-        });
-      } catch (err) {
-        console.error('Error loading page JSON:', err);
-        renderBackground(canvas);
-        canvas.requestRenderAll();
-        initPageHistory(currentPageId, getCanvasSnapshot(canvas));
-      }
+        } catch (err) {
+          console.error('Error loading page JSON:', err);
+          renderBackground(canvas);
+          canvas.requestRenderAll();
+          initPageHistory(currentPageId, getCanvasSnapshot(canvas));
+        }
+      };
+
+      loadPage();
     } else {
       const oldObjs = canvas.getObjects().filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
       canvas.remove(...oldObjs);
@@ -2186,7 +2320,8 @@ export const Board: React.FC = () => {
             return;
           }
 
-          await canvas.loadFromJSON(parsed);
+          const sanitized = await sanitizeCanvasJsonForLoading(parsed);
+          await canvas.loadFromJSON(sanitized);
 
           const liveTool = useBoardStore.getState().currentTool;
           const isSelect = liveTool === 'select';

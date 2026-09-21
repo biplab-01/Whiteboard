@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useBoardStore } from '../store/useBoardStore';
 import type { ToolType } from '../store/useBoardStore';
+import { fileToDataUrl, isImageFile, isPdfFile } from '../utils/mediaUtils';
 import { 
   Undo2,
   Redo2,
@@ -308,17 +309,35 @@ export const Toolbar: React.FC = () => {
           type="file" 
           accept="image/*,application/pdf"
           className="hidden" 
-          onChange={(e) => {
+          onChange={async (e) => {
             const file = e.target.files?.[0];
             if (file) {
-              const url = URL.createObjectURL(file);
-              window.dispatchEvent(new CustomEvent('insert-media', { 
-                detail: { 
-                  url, 
-                  type: file.type.startsWith('image/') ? 'image' : 'pdf',
-                  file
+              const isImg = isImageFile(file);
+              const isPdf = isPdfFile(file);
+
+              if (isImg) {
+                try {
+                  const dataUrl = await fileToDataUrl(file);
+                  window.dispatchEvent(new CustomEvent('insert-media', { 
+                    detail: { 
+                      url: dataUrl, 
+                      type: 'image',
+                      file
+                    }
+                  }));
+                } catch (err) {
+                  console.error('Failed to convert image to Data URL:', err);
                 }
-              }));
+              } else if (isPdf) {
+                const url = URL.createObjectURL(file);
+                window.dispatchEvent(new CustomEvent('insert-media', { 
+                  detail: { 
+                    url, 
+                    type: 'pdf',
+                    file
+                  }
+                }));
+              }
               e.target.value = ''; // reset input
             }
           }}

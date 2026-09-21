@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useBoardStore, getPageDimensions, getPageBackgroundSettings } from '../store/useBoardStore';
+import { sanitizeCanvasJsonForLoading } from '../utils/mediaUtils';
 import { Download, FileText, Image as ImageIcon, CheckCircle, Loader2 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import * as fabric from 'fabric';
@@ -71,7 +72,8 @@ export const ExportModal: React.FC = () => {
         if (parsed.objects) {
           parsed.objects = parsed.objects.filter((o: any) => o.name !== 'a4-background' && o.name !== 'a4-ruled-line');
         }
-        await staticCanvas.loadFromJSON(parsed);
+        const sanitized = await sanitizeCanvasJsonForLoading(parsed);
+        await staticCanvas.loadFromJSON(sanitized);
       } catch (e) {
         console.warn('Error loading page JSON for export:', e);
       }
