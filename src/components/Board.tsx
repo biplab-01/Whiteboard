@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import * as fabric from 'fabric';
-import { useBoardStore, getPageDimensions, extractBgSettingsFromPage } from '../store/useBoardStore';
+import { useBoardStore, getPageDimensions, extractBgSettingsFromPage, CLIENT_SESSION_ID } from '../store/useBoardStore';
+import { useShallow } from 'zustand/react/shallow';
 import * as pdfjsLib from 'pdfjs-dist';
 // For Vite we can import the worker as a URL
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
@@ -723,7 +724,25 @@ export const Board: React.FC = () => {
     setActiveTextFormat,
     eraserMode,
     eraserSize
-  } = useBoardStore();
+  } = useBoardStore(useShallow((s) => ({
+    currentPageId: s.currentPageId,
+    currentTool: s.currentTool,
+    strokeColor: s.strokeColor,
+    strokeWidth: s.strokeWidth,
+    fillColor: s.fillColor,
+    isRuled: s.isRuled,
+    ruleColor: s.ruleColor,
+    bgType: s.bgType,
+    bgColor: s.bgColor,
+    pageSize: s.pageSize,
+    pageOrientation: s.pageOrientation,
+    opacity: s.opacity,
+    setCurrentTool: s.setCurrentTool,
+    isDarkMode: s.isDarkMode,
+    setActiveTextFormat: s.setActiveTextFormat,
+    eraserMode: s.eraserMode,
+    eraserSize: s.eraserSize,
+  })));
 
   const renderBackground = useCallback((canvas: fabric.Canvas) => {
     const { width: pageW, height: pageH } = getPageDimensions(pageSize, pageOrientation);
@@ -824,7 +843,7 @@ export const Board: React.FC = () => {
       pageSize: store.pageSize || existingBg.pageSize,
       pageOrientation: store.pageOrientation || existingBg.pageOrientation,
     };
-    json._clientId = (store as any).CLIENT_SESSION_ID || 'client-session';
+    json._clientId = CLIENT_SESSION_ID;
     return JSON.stringify(json);
   }, []);
 
@@ -996,33 +1015,43 @@ export const Board: React.FC = () => {
       targetFindTolerance: 6,
     });
     
-    // Override findTarget so active shapes are immediately draggable from anywhere inside their boundary,
-    // while ensuring any foreground strokes/text drawn on top of an active image or shape can still be selected!
+    // Override findTarget so foreground strokes and text drawn on top of background photos
+    // or shapes are always prioritized and easily selectable/movable
     const originalFindTarget = canvas.findTarget.bind(canvas);
     (canvas as any).findTarget = function(e: MouseEvent | fabric.TPointerEvent) {
+      if (canvas.isDrawingMode) {
+        return undefined;
+      }
       const active = canvas.getActiveObject();
-      if (active && (active as any).name !== 'a4-background' && (active as any).name !== 'a4-ruled-line') {
-        // When editing text inside a textbox, let Fabric handle sub-target finding and cursor placement natively
-        if ((active as any).isEditing) {
-          return originalFindTarget(e);
-        }
-        const scenePoint = canvas.getScenePoint(e);
+      if (active && (active as any).isEditing) {
+        return originalFindTarget(e);
+      }
+      const scenePoint = canvas.getScenePoint(e);
 
-        // Check if user clicked on any foreground object (stroke, text, shape) layered ABOVE the active object
-        const objects = canvas.getObjects();
-        const activeIdx = objects.indexOf(active);
-        for (let i = objects.length - 1; i > activeIdx; i--) {
-          const fgObj = objects[i];
-          if ((fgObj as any).name === 'a4-background' || (fgObj as any).name === 'a4-ruled-line') continue;
-          if (isPointTouchingObject(fgObj, scenePoint)) {
-            return fgObj;
-          }
+      // Check all user objects from top (foreground) to bottom (background)
+      const objects = canvas.getObjects();
+      for (let i = objects.length - 1; i >= 0; i--) {
+        const obj = objects[i];
+        if ((obj as any).name === 'a4-background' || (obj as any).name === 'a4-ruled-line') continue;
+
+        const isImg = (obj.type || '').toLowerCase() === 'image' || (obj as any).name === 'pdf-page';
+
+        // 1. Non-image foreground object (strokes, text, shapes, lines) - prioritize immediately!
+        if (!isImg && isPointTouchingObject(obj, scenePoint)) {
+          return obj;
         }
 
-        if (typeof active.containsPoint === 'function' && active.containsPoint(scenePoint)) {
+        // 2. Currently active object if clicked inside its area
+        if (active && obj === active && typeof active.containsPoint === 'function' && active.containsPoint(scenePoint)) {
           return active;
         }
+
+        // 3. Background photo/image
+        if (isImg && isPointTouchingObject(obj, scenePoint)) {
+          return obj;
+        }
       }
+
       return originalFindTarget(e);
     };
 
@@ -2152,6 +2181,11 @@ export const Board: React.FC = () => {
             ? JSON.parse(remotePage.canvas_data)
             : remotePage.canvas_data;
 
+          // If this update was authored by this local client session, never re-load
+          if (parsed && (parsed._clientId === CLIENT_SESSION_ID || parsed._clientId === 'client-session')) {
+            return;
+          }
+
           await canvas.loadFromJSON(parsed);
 
           const liveTool = useBoardStore.getState().currentTool;
@@ -2387,8 +2421,8 @@ export const Board: React.FC = () => {
         }
         brush.width = Math.max(strokeWidth * 4, 18);
       } else {
-        brush.color = strokeColor;
-        brush.width = strokeWidth;
+        brush.color = strokeColor || (isDarkMode ? '#ffffff' : '#000000');
+        brush.width = strokeWidth || 3;
       }
 
       brush.strokeLineCap = 'round';
@@ -2401,14 +2435,34 @@ export const Board: React.FC = () => {
         if (!points || points.length === 0) {
           return [] as any;
         }
-        if (points.length <= 2) {
-          const p1 = points[0];
-          const p2 = points[points.length - 1];
-          if (Math.hypot(p2.x - p1.x, p2.y - p1.y) < 1.5) {
-            return [['M', p1.x - 0.5, p1.y], ['L', p1.x + 0.5, p1.y]] as any;
-          }
+        // Calculate bounding box of all points in gesture
+        let minX = points[0].x, maxX = points[0].x;
+        let minY = points[0].y, maxY = points[0].y;
+        for (let i = 1; i < points.length; i++) {
+          if (points[i].x < minX) minX = points[i].x;
+          if (points[i].x > maxX) maxX = points[i].x;
+          if (points[i].y < minY) minY = points[i].y;
+          if (points[i].y > maxY) maxY = points[i].y;
         }
-        return originalConvert(points);
+        // If all points are concentrated within a 2.5px radius (tap dot, period, i-dot, quick touch)
+        if (maxX - minX < 2.5 && maxY - minY < 2.5) {
+          const cx = (minX + maxX) / 2;
+          const cy = (minY + maxY) / 2;
+          return [
+            ['M', cx - 0.75, cy],
+            ['L', cx + 0.75, cy]
+          ] as any;
+        }
+        const res = originalConvert(points);
+        if (!res || res.length === 0) {
+          const cx = (minX + maxX) / 2;
+          const cy = (minY + maxY) / 2;
+          return [
+            ['M', cx - 0.75, cy],
+            ['L', cx + 0.75, cy]
+          ] as any;
+        }
+        return res;
       };
 
       canvas.freeDrawingBrush = brush;
@@ -2416,8 +2470,8 @@ export const Board: React.FC = () => {
       canvas.on('path:created', (opt: any) => {
         if (opt.path) {
           opt.path.strokeUniform = true;
-          opt.path.selectable = true;
-          opt.path.evented = true;
+          opt.path.selectable = false;
+          opt.path.evented = false;
           opt.path.setCoords();
         }
         lastLocalDrawTimeRef.current = Date.now();
