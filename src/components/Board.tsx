@@ -227,7 +227,8 @@ if (fabric.Textbox && fabric.Textbox.prototype) {
 
 // Helper: Normalize Textbox dimensions, scale, and controls to prevent distortion
 const normalizeTextObject = (obj: fabric.FabricObject) => {
-  if (obj.type === 'textbox' || obj.type === 'i-text') {
+  const objType = (obj.type || '').toLowerCase();
+  if (objType === 'textbox' || objType === 'i-text') {
     const textObj = obj as fabric.Textbox;
     textObj.setControlsVisibility({
       mt: false,
@@ -298,6 +299,164 @@ const distToSegment = (px: number, py: number, x1: number, y1: number, x2: numbe
   return Math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)));
 };
 
+// Top-level Helper: Universal, high-precision hit testing for strokes, text, shapes, and images
+const isPointTouchingObject = (obj: fabric.FabricObject, point: fabric.Point): boolean => {
+  if (!obj || !obj.visible) return false;
+  const objType = (obj.type || '').toLowerCase();
+  const strokeW = (obj.strokeWidth || 1) * Math.max(obj.scaleX || 1, obj.scaleY || 1);
+  const hitTolerance = Math.max(strokeW / 2 + 8, 12);
+  const hasSolidFill = !!(
+    obj.fill && 
+    obj.fill !== 'transparent' && 
+    obj.fill !== '' && 
+    obj.fill !== 'rgba(0,0,0,0)'
+  );
+
+  // If text
+  if (objType === 'textbox' || objType === 'i-text') {
+    if (typeof obj.containsPoint === 'function' && obj.containsPoint(point)) {
+      return true;
+    }
+    const b = obj.getBoundingRect();
+    return (
+      point.x >= b.left - 4 &&
+      point.x <= b.left + b.width + 4 &&
+      point.y >= b.top - 4 &&
+      point.y <= b.top + b.height + 4
+    );
+  }
+
+  // If image
+  if (objType === 'image') {
+    return typeof obj.containsPoint === 'function' && obj.containsPoint(point);
+  }
+
+  // If solid filled (not hollow), touches if inside the shape
+  if (hasSolidFill && objType !== 'path' && objType !== 'line') {
+    if (typeof obj.containsPoint === 'function' && obj.containsPoint(point)) {
+      return true;
+    }
+  }
+
+  // Line / Arrow stroke hit test
+  if (objType === 'line') {
+    const line = obj as fabric.Line;
+    const matrix = obj.calcTransformMatrix();
+    const p1 = fabric.util.transformPoint(new fabric.Point(line.x1 || 0, line.y1 || 0), matrix);
+    const p2 = fabric.util.transformPoint(new fabric.Point(line.x2 || 0, line.y2 || 0), matrix);
+    return distToSegment(point.x, point.y, p1.x, p1.y, p2.x, p2.y) <= hitTolerance;
+  }
+
+  // Rect / Triangle / Polygon perimeter stroke hit test
+  if (objType === 'rect' || objType === 'triangle' || objType === 'polygon') {
+    const coords = obj.getCoords();
+    for (let i = 0; i < coords.length; i++) {
+      const p1 = coords[i];
+      const p2 = coords[(i + 1) % coords.length];
+      if (distToSegment(point.x, point.y, p1.x, p1.y, p2.x, p2.y) <= hitTolerance) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Circle / Ellipse perimeter stroke hit test
+  if (objType === 'ellipse' || objType === 'circle') {
+    const center = obj.getCenterPoint();
+    const angle = -(obj.angle || 0) * (Math.PI / 180);
+    const dx = point.x - center.x;
+    const dy = point.y - center.y;
+    const localX = dx * Math.cos(angle) - dy * Math.sin(angle);
+    const localY = dx * Math.sin(angle) + dy * Math.cos(angle);
+
+    const rx = ((obj as fabric.Ellipse).rx || (obj.width || 0) / 2) * (obj.scaleX || 1);
+    const ry = ((obj as fabric.Ellipse).ry || (obj.height || 0) / 2) * (obj.scaleY || 1);
+
+    if (rx <= 0 || ry <= 0) return false;
+
+    const normalizedDist = Math.sqrt(Math.pow(localX / rx, 2) + Math.pow(localY / ry, 2));
+
+    if (hasSolidFill && normalizedDist <= 1.05) return true;
+
+    const radialDist = Math.abs(normalizedDist - 1) * Math.min(rx, ry);
+    return radialDist <= hitTolerance;
+  }
+
+  // Freehand Pen / Highlighter Path segments
+  if (objType === 'path') {
+    const path = obj as any;
+    const offX = (path.pathOffset?.x || 0);
+    const offY = (path.pathOffset?.y || 0);
+    const matrix = obj.calcTransformMatrix();
+    const pathTolerance = Math.max(strokeW / 2 + 12, 14);
+
+    // Fast bounding box check with generous tolerance
+    const b = obj.getBoundingRect();
+    if (
+      point.x < b.left - pathTolerance ||
+      point.x > b.left + b.width + pathTolerance ||
+      point.y < b.top - pathTolerance ||
+      point.y > b.top + b.height + pathTolerance
+    ) {
+      return false;
+    }
+
+    if (Array.isArray(path.path)) {
+      let prevPt: fabric.Point | null = null;
+
+      for (const cmd of path.path) {
+        const cmdType = cmd[0];
+        if (cmdType === 'M' || cmdType === 'L') {
+          const localPt = new fabric.Point(Number(cmd[1]) - offX, Number(cmd[2]) - offY);
+          const currentPt = fabric.util.transformPoint(localPt, matrix);
+          if (prevPt) {
+            if (distToSegment(point.x, point.y, prevPt.x, prevPt.y, currentPt.x, currentPt.y) <= pathTolerance) {
+              return true;
+            }
+          } else {
+            // Tap dot check
+            if (Math.hypot(point.x - currentPt.x, point.y - currentPt.y) <= pathTolerance) {
+              return true;
+            }
+          }
+          prevPt = currentPt;
+        } else if (cmdType === 'Q') {
+          // Quadratic bezier: sample points along the curve
+          const cpLocal = new fabric.Point(Number(cmd[1]) - offX, Number(cmd[2]) - offY);
+          const endLocal = new fabric.Point(Number(cmd[3]) - offX, Number(cmd[4]) - offY);
+          const cpPt = fabric.util.transformPoint(cpLocal, matrix);
+          const endPt = fabric.util.transformPoint(endLocal, matrix);
+          const startPt = prevPt || cpPt;
+
+          let lastSample = startPt;
+          for (let t = 0.25; t <= 1; t += 0.25) {
+            const oneMinusT = 1 - t;
+            const sampleX = oneMinusT * oneMinusT * startPt.x + 2 * oneMinusT * t * cpPt.x + t * t * endPt.x;
+            const sampleY = oneMinusT * oneMinusT * startPt.y + 2 * oneMinusT * t * cpPt.y + t * t * endPt.y;
+            if (distToSegment(point.x, point.y, lastSample.x, lastSample.y, sampleX, sampleY) <= pathTolerance) {
+              return true;
+            }
+            lastSample = new fabric.Point(sampleX, sampleY);
+          }
+          prevPt = endPt;
+        } else if (cmdType === 'C') {
+          // Cubic bezier
+          const endLocal = new fabric.Point(Number(cmd[5]) - offX, Number(cmd[6]) - offY);
+          const endPt = fabric.util.transformPoint(endLocal, matrix);
+          if (prevPt && distToSegment(point.x, point.y, prevPt.x, prevPt.y, endPt.x, endPt.y) <= pathTolerance) {
+            return true;
+          }
+          prevPt = endPt;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  return false;
+};
+
 // Helper: Extract sampled points in scene coordinates along any object's perimeter/path/stroke
 interface SampledScenePoint {
   x: number;
@@ -307,8 +466,9 @@ interface SampledScenePoint {
 const getObjectSampledPoints = (obj: any): SampledScenePoint[] => {
   const matrix = obj.calcTransformMatrix();
   const points: SampledScenePoint[] = [];
+  const objType = (obj.type || '').toLowerCase();
 
-  if (obj.type === 'path' && Array.isArray(obj.path)) {
+  if (objType === 'path' && Array.isArray(obj.path)) {
     const offX = obj.pathOffset?.x || 0;
     const offY = obj.pathOffset?.y || 0;
     let lastLocal: { x: number; y: number } | null = null;
@@ -459,7 +619,8 @@ const sliceObjectWithEraser = (
   }
 
   const supportedTypes = ['path', 'line', 'rect', 'triangle', 'ellipse', 'circle', 'polygon'];
-  if (!supportedTypes.includes(obj.type)) {
+  const objType = (obj.type || '').toLowerCase();
+  if (!supportedTypes.includes(objType)) {
     return { modified: false, remainingPaths: [] };
   }
 
@@ -485,7 +646,7 @@ const sliceObjectWithEraser = (
     return { modified: false, remainingPaths: [] };
   }
 
-  const isClosedLoop = ['rect', 'triangle', 'ellipse', 'circle', 'polygon'].includes(obj.type);
+  const isClosedLoop = ['rect', 'triangle', 'ellipse', 'circle', 'polygon'].includes(objType);
   
   const chains: SampledScenePoint[][] = [];
   let currentChain: SampledScenePoint[] = [];
@@ -541,6 +702,7 @@ export const Board: React.FC = () => {
   const clipboardRef = useRef<fabric.FabricObject | null>(null);
   const historyMapRef = useRef<Map<string, { undoStack: string[]; redoStack: string[] }>>(new Map());
   const isHistoryOperationRef = useRef<boolean>(false);
+  const lastLocalDrawTimeRef = useRef<number>(0);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   
   const { 
@@ -834,7 +996,8 @@ export const Board: React.FC = () => {
       targetFindTolerance: 6,
     });
     
-    // Override findTarget so active shapes are immediately draggable from anywhere inside their boundary
+    // Override findTarget so active shapes are immediately draggable from anywhere inside their boundary,
+    // while ensuring any foreground strokes/text drawn on top of an active image or shape can still be selected!
     const originalFindTarget = canvas.findTarget.bind(canvas);
     (canvas as any).findTarget = function(e: MouseEvent | fabric.TPointerEvent) {
       const active = canvas.getActiveObject();
@@ -844,6 +1007,18 @@ export const Board: React.FC = () => {
           return originalFindTarget(e);
         }
         const scenePoint = canvas.getScenePoint(e);
+
+        // Check if user clicked on any foreground object (stroke, text, shape) layered ABOVE the active object
+        const objects = canvas.getObjects();
+        const activeIdx = objects.indexOf(active);
+        for (let i = objects.length - 1; i > activeIdx; i--) {
+          const fgObj = objects[i];
+          if ((fgObj as any).name === 'a4-background' || (fgObj as any).name === 'a4-ruled-line') continue;
+          if (isPointTouchingObject(fgObj, scenePoint)) {
+            return fgObj;
+          }
+        }
+
         if (typeof active.containsPoint === 'function' && active.containsPoint(scenePoint)) {
           return active;
         }
@@ -1873,6 +2048,9 @@ export const Board: React.FC = () => {
     const canvas = fabricRef.current;
     if (!canvas || !currentPageId) return;
 
+    // Guard: If we are already on this active page, do not reload from JSON and wipe live strokes!
+    if (activePageIdRef.current === currentPageId) return;
+
     // 1. If switching from an existing page, save that previous page's snapshot FIRST
     const previousPageId = activePageIdRef.current;
     if (previousPageId && previousPageId !== currentPageId) {
@@ -1965,6 +2143,9 @@ export const Board: React.FC = () => {
       const active = canvas.getActiveObject();
       if (active && (active as any).isEditing) return;
 
+      // Do not overwrite canvas if local user drew strokes in the last 3 seconds
+      if (Date.now() - lastLocalDrawTimeRef.current < 3000) return;
+
       if (remotePage.canvas_data) {
         try {
           const parsed = typeof remotePage.canvas_data === 'string'
@@ -2027,110 +2208,6 @@ export const Board: React.FC = () => {
     let isErasing = false;
     let hasErasedInGesture = false;
 
-    const isPointTouchingObject = (obj: fabric.FabricObject, point: fabric.Point): boolean => {
-      const strokeW = (obj.strokeWidth || 1) * Math.max(obj.scaleX || 1, obj.scaleY || 1);
-      const hitTolerance = Math.max(strokeW / 2 + 6, 8);
-      const hasSolidFill = !!(
-        obj.fill && 
-        obj.fill !== 'transparent' && 
-        obj.fill !== '' && 
-        obj.fill !== 'rgba(0,0,0,0)'
-      );
-
-      // If text or image, standard area hit is natural
-      if (obj.type === 'textbox' || obj.type === 'i-text' || obj.type === 'image') {
-        return obj.containsPoint(point);
-      }
-
-      // If solid filled (not hollow), touches if inside the shape
-      if (hasSolidFill && obj.type !== 'path' && obj.type !== 'line') {
-        if (obj.containsPoint(point)) {
-          return true;
-        }
-      }
-
-      // Line / Arrow stroke hit test
-      if (obj.type === 'line') {
-        const line = obj as fabric.Line;
-        const matrix = obj.calcTransformMatrix();
-        const p1 = fabric.util.transformPoint(new fabric.Point(line.x1 || 0, line.y1 || 0), matrix);
-        const p2 = fabric.util.transformPoint(new fabric.Point(line.x2 || 0, line.y2 || 0), matrix);
-        return distToSegment(point.x, point.y, p1.x, p1.y, p2.x, p2.y) <= hitTolerance;
-      }
-
-      // Rect / Triangle / Polygon perimeter stroke hit test
-      if (obj.type === 'rect' || obj.type === 'triangle' || obj.type === 'polygon') {
-        const coords = obj.getCoords();
-        for (let i = 0; i < coords.length; i++) {
-          const p1 = coords[i];
-          const p2 = coords[(i + 1) % coords.length];
-          if (distToSegment(point.x, point.y, p1.x, p1.y, p2.x, p2.y) <= hitTolerance) {
-            return true;
-          }
-        }
-        return false;
-      }
-
-      // Circle / Ellipse perimeter stroke hit test
-      if (obj.type === 'ellipse' || obj.type === 'circle') {
-        const center = obj.getCenterPoint();
-        const angle = -(obj.angle || 0) * (Math.PI / 180);
-        const dx = point.x - center.x;
-        const dy = point.y - center.y;
-        const localX = dx * Math.cos(angle) - dy * Math.sin(angle);
-        const localY = dx * Math.sin(angle) + dy * Math.cos(angle);
-
-        const rx = ((obj as fabric.Ellipse).rx || (obj.width || 0) / 2) * (obj.scaleX || 1);
-        const ry = ((obj as fabric.Ellipse).ry || (obj.height || 0) / 2) * (obj.scaleY || 1);
-
-        if (rx <= 0 || ry <= 0) return false;
-
-        const normalizedDist = Math.sqrt(Math.pow(localX / rx, 2) + Math.pow(localY / ry, 2));
-
-        if (hasSolidFill && normalizedDist <= 1.05) return true;
-
-        const radialDist = Math.abs(normalizedDist - 1) * Math.min(rx, ry);
-        return radialDist <= hitTolerance;
-      }
-
-      // Freehand Pen / Highlighter Path segments
-      if (obj.type === 'path') {
-        const path = obj as any;
-        const offX = (path.pathOffset?.x || 0);
-        const offY = (path.pathOffset?.y || 0);
-        const matrix = obj.calcTransformMatrix();
-        const pathTolerance = Math.max(strokeW / 2 + 8, 10);
-
-        if (Array.isArray(path.path)) {
-          let prevPt: fabric.Point | null = null;
-
-          for (const cmd of path.path) {
-            if (cmd[0] === 'M' || cmd[0] === 'L') {
-              const localPt = new fabric.Point(Number(cmd[1]) - offX, Number(cmd[2]) - offY);
-              const currentPt = fabric.util.transformPoint(localPt, matrix);
-              if (prevPt && distToSegment(point.x, point.y, prevPt.x, prevPt.y, currentPt.x, currentPt.y) <= pathTolerance) {
-                return true;
-              }
-              prevPt = currentPt;
-            } else if (cmd[0] === 'Q' || cmd[0] === 'C') {
-              const endX = Number(cmd[cmd.length - 2]) - offX;
-              const endY = Number(cmd[cmd.length - 1]) - offY;
-              const currentPt = fabric.util.transformPoint(new fabric.Point(endX, endY), matrix);
-              if (prevPt && distToSegment(point.x, point.y, prevPt.x, prevPt.y, currentPt.x, currentPt.y) <= pathTolerance) {
-                return true;
-              }
-              prevPt = currentPt;
-            }
-          }
-        }
-
-        return false;
-      }
-
-      // Default
-      return false;
-    };
-
     const eraseObjectAtPoint = (pointerEvent: MouseEvent | fabric.TPointerEvent) => {
       const scenePoint = canvas.getScenePoint(pointerEvent);
       const objects = [...canvas.getObjects()].reverse();
@@ -2165,17 +2242,12 @@ export const Board: React.FC = () => {
 
         const scenePoint = canvas.getScenePoint(opt.e);
 
-        // If an object is already selected and user clicks inside its boundary/handles, keep active for easy dragging
-        if (active) {
-          if ((active as any).__corner) {
-            return;
-          }
-          if (typeof active.containsPoint === 'function' && active.containsPoint(scenePoint)) {
-            return;
-          }
+        // If user is interacting with corner transformation handles of currently active object
+        if (active && (active as any).__corner) {
+          return;
         }
 
-        // Otherwise check if touching another object's stroke
+        // Prioritize testing objects from top to bottom (foreground to background)
         const objects = [...canvas.getObjects()].reverse();
         let clickedTarget: fabric.FabricObject | null = null;
         for (const obj of objects) {
@@ -2191,6 +2263,9 @@ export const Board: React.FC = () => {
             canvas.setActiveObject(clickedTarget);
             canvas.requestRenderAll();
           }
+        } else if (active && typeof active.containsPoint === 'function' && active.containsPoint(scenePoint)) {
+          // Clicked within the currently active object's boundary and no foreground stroke was hit
+          return;
         } else {
           // Clicked on empty space completely outside any stroke
           if (active && !opt.e.shiftKey) {
@@ -2318,13 +2393,20 @@ export const Board: React.FC = () => {
 
       brush.strokeLineCap = 'round';
       brush.strokeLineJoin = 'round';
+      brush.decimate = 0;
 
-      // Ensure tap dots (e.g. dots on 'i', periods, quick marks) are not discarded as empty paths by Fabric
+      // Ensure tap dots (e.g. dots on 'i', periods, quick marks) and short strokes are never discarded
       const originalConvert = brush.convertPointsToSVGPath.bind(brush);
       brush.convertPointsToSVGPath = function(points: any[]) {
-        if (points && points.length === 1) {
-          const p = points[0];
-          return [['M', p.x, p.y], ['L', p.x + 0.1, p.y + 0.1]] as any;
+        if (!points || points.length === 0) {
+          return [] as any;
+        }
+        if (points.length <= 2) {
+          const p1 = points[0];
+          const p2 = points[points.length - 1];
+          if (Math.hypot(p2.x - p1.x, p2.y - p1.y) < 1.5) {
+            return [['M', p1.x - 0.5, p1.y], ['L', p1.x + 0.5, p1.y]] as any;
+          }
         }
         return originalConvert(points);
       };
@@ -2334,8 +2416,12 @@ export const Board: React.FC = () => {
       canvas.on('path:created', (opt: any) => {
         if (opt.path) {
           opt.path.strokeUniform = true;
-          opt.path.selectable = false;
+          opt.path.selectable = true;
+          opt.path.evented = true;
+          opt.path.setCoords();
         }
+        lastLocalDrawTimeRef.current = Date.now();
+        canvas.requestRenderAll();
         recordState();
       });
     } else {
